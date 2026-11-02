@@ -16,17 +16,25 @@ import (
 )
 
 type ExifTool struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout *bufio.Reader
-	stderr *bufio.Reader
-	seq    int
-	mu     sync.Mutex
+	cmd       *exec.Cmd
+	stdin     io.WriteCloser
+	stdout    *bufio.Reader
+	stderr    *bufio.Reader
+	seq       int
+	mu        sync.Mutex
+	closeOnce sync.Once
 }
 
 // findExifTool returns the exiftool executable: explicit path, embedded copy (Windows), next to exe, or PATH.
 func findExifTool(explicit string) (string, error) {
 	if explicit != "" {
+		st, err := os.Stat(explicit)
+		if err != nil {
+			return "", err
+		}
+		if st.IsDir() {
+			return "", fmt.Errorf("%s", explicit)
+		}
 		return explicit, nil
 	}
 	if len(embeddedExifTool) > 0 {
@@ -102,7 +110,7 @@ func startExifTool(path string) (*ExifTool, error) {
 	out, _ := cmd.StdoutPipe()
 	er, _ := cmd.StderrPipe()
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("не удалось запустить exiftool (%s): %v", path, err)
+		return nil, err
 	}
 	return &ExifTool{cmd: cmd, stdin: in, stdout: bufio.NewReaderSize(out, 1<<16), stderr: bufio.NewReaderSize(er, 1<<16)}, nil
 }
@@ -145,10 +153,23 @@ func (et *ExifTool) Run(args ...string) (string, string, error) {
 	return so, se, err
 }
 
+// Kill unblocks a command stuck in -stay_open. Close still waits for the process.
+func (et *ExifTool) Kill() {
+	if et != nil && et.cmd != nil && et.cmd.Process != nil {
+		et.cmd.Process.Kill()
+	}
+}
+
 func (et *ExifTool) Close() {
-	io.WriteString(et.stdin, "-stay_open\nFalse\n")
-	et.stdin.Close()
-	et.cmd.Wait()
+	et.closeOnce.Do(func() {
+		if et.stdin != nil {
+			io.WriteString(et.stdin, "-stay_open\nFalse\n")
+			et.stdin.Close()
+		}
+		if et.cmd != nil {
+			et.cmd.Wait()
+		}
+	})
 }
 
 // ReadTags returns existing tag values (group0:tag -> string).
@@ -167,7 +188,9 @@ func (et *ExifTool) ReadTags(path string) map[string]string {
 	if json.Unmarshal([]byte(so), &arr) == nil && len(arr) > 0 {
 		for k, v := range arr[0] {
 			s := strings.TrimSpace(fmt.Sprint(v))
-			if s == "" || strings.HasPrefix(s, "0000:00:00") || s == "    :  :     :  :  " {
+			// 0000:00:00 and the 1904-01-01 QuickTime epoch are "no date".
+			// With QuickTimeUTC=1, ExifTool 12.x reports the epoch as 1904:01:01.
+			if s == "" || strings.HasPrefix(s, "0000:00:00") || strings.HasPrefix(s, "1904:01:01 00:00:00") || s == "    :  :     :  :  " {
 				continue
 			}
 			res[k] = s

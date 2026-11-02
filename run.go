@@ -60,6 +60,8 @@ type Progress struct {
 	Report     string `json:"report"`
 	Log        string `json:"log"`
 	Dest       string `json:"dest"`
+	Lang       string `json:"lang,omitempty"`
+	Stopped    bool   `json:"stopped"`
 	Stats      *Stats `json:"stats"`
 	started    time.Time
 	cancel     atomic.Bool
@@ -84,6 +86,9 @@ type stateRec struct {
 
 type Runner struct {
 	o          Options
+	L          Lang
+	folderLang Lang
+	folders    Folders
 	loc        *time.Location
 	p          *Progress
 	st         Stats
@@ -103,8 +108,10 @@ type Runner struct {
 	incomplete []*Entry
 }
 
-func (r *Runner) logf(format string, a ...any) {
-	line := time.Now().Format("15:04:05 ") + fmt.Sprintf(format, a...)
+func (r *Runner) logf(format string, a ...any) { r.log(fmt.Sprintf(format, a...)) }
+
+func (r *Runner) log(msg string) {
+	line := time.Now().Format("15:04:05 ") + msg
 	r.logMu.Lock()
 	if r.logF != nil {
 		fmt.Fprintln(r.logF, line)
@@ -117,50 +124,62 @@ func (r *Runner) logf(format string, a ...any) {
 
 func (r *Runner) stat(f func(s *Stats)) { r.smu.Lock(); f(&r.st); r.smu.Unlock() }
 
-var errCancelled = errors.New("остановлено пользователем")
+var errCancelled = errors.New("cancelled")
+
+func (r *Runner) cancelled() bool { return r.p != nil && r.p.cancel.Load() }
 
 func Run(o Options, p *Progress) (err error) {
-	r := &Runner{o: o, p: p, state: map[string]stateRec{}, reserved: map[string]bool{}}
+	L := NormalizeLang(o.Lang)
+	o.Lang = string(L)
+	r := &Runner{o: o, L: L, p: p, state: map[string]stateRec{}, reserved: map[string]bool{}}
 	p.set(func(p *Progress) {
-		p.Running, p.Finished, p.Err, p.Warning, p.DryRun, p.Phase, p.Done, p.Total, p.BytesDone, p.BytesTotal = true, false, "", "", o.DryRun, "Подготовка", 0, 0, 0, 0
+		p.Running, p.Finished, p.Err, p.Warning, p.DryRun, p.Phase, p.Done, p.Total, p.BytesDone, p.BytesTotal = true, false, "", "", o.DryRun, L.T("phase.prep"), 0, 0, 0, 0
+		p.Stopped = false
 		p.started = time.Now()
 		p.Stats = nil
 		p.Dest = o.Dest
+		p.Lang = string(L)
 	})
-	p.cancel.Store(false)
 	defer func() {
 		if rec := recover(); rec != nil {
-			err = fmt.Errorf("внутренняя ошибка: %v", rec)
+			err = r.L.E("err.internal", rec)
 		}
 		st := r.st
+		stopped := errors.Is(err, errCancelled)
 		p.set(func(p *Progress) {
 			p.Running, p.Finished = false, true
-			if err != nil {
+			if stopped {
+				p.Stopped = true
+				p.Err = ""
+				p.Phase = r.L.T("phase.stopped")
+			} else if err != nil {
 				p.Err = err.Error()
-				p.Phase = "Ошибка"
+				p.Phase = r.L.T("phase.error")
 			} else {
-				p.Phase = "Готово"
+				p.Phase = r.L.T("phase.done")
 			}
 			p.Stats = &st
 			p.Current = ""
 		})
 		if r.logF != nil {
-			if err != nil {
-				r.logf("ОШИБКА: %v", err)
+			if stopped {
+				r.log(r.L.T("log.stopped"))
+			} else if err != nil {
+				r.log(r.L.T("log.error", err))
 			}
 			r.logF.Close()
 		}
 	}()
 	if o.Dest == "" {
-		return errors.New("не указана папка назначения")
+		return r.L.E("err.nodest")
 	}
 	if len(o.Sources) == 0 {
-		return errors.New("не указаны источники")
+		return r.L.E("err.nosrc")
 	}
 	o.Dest = filepath.Clean(o.Dest)
 	r.o = o
 	if r.loc, err = parseTZ(o.TZ); err != nil {
-		return fmt.Errorf("часовой пояс %q: %v", o.TZ, err)
+		return r.L.E("err.tz", o.TZ, err)
 	}
 	for _, s := range o.Sources {
 		s = strings.Trim(strings.TrimSpace(s), "\"")
@@ -168,7 +187,7 @@ func Run(o Options, p *Progress) (err error) {
 			continue
 		}
 		if a, b := absLower(s), absLower(o.Dest); a == b || strings.HasPrefix(b, a+string(filepath.Separator)) {
-			return fmt.Errorf("папка назначения не может быть внутри источника: %s", s)
+			return r.L.E("err.destinside", s)
 		}
 	}
 	if o.DryRun {
@@ -181,30 +200,39 @@ func Run(o Options, p *Progress) (err error) {
 	}
 	r.logF, _ = os.OpenFile(filepath.Join(r.outDir, "log.txt"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	p.set(func(p *Progress) { p.Log = filepath.Join(r.outDir, "log.txt") })
-	r.logf("=== Запуск (dry-run=%v) источники=%q назначение=%q структура=%s альбомы=%s TZ=%s", o.DryRun, o.Sources, o.Dest, o.Layout, o.Albums, r.loc)
-	if b, e := os.ReadFile(filepath.Join(o.Dest, "_restore", "state.json")); e == nil {
-		json.Unmarshal(b, &r.state)
-		r.logf("Найдено состояние прошлого запуска: %d файлов", len(r.state))
+	r.log(r.L.T("log.start", o.DryRun, o.Sources, o.Dest, o.Layout, o.Albums, r.loc, o.Lang))
+	if stored, hasLang, files, legacy, ok := loadState(filepath.Join(o.Dest, "_restore", "state.json")); ok {
+		r.state = files
+		r.chooseFolderLang(stored, hasLang, legacy)
+		r.log(r.L.T("log.state", len(files)))
+	} else {
+		r.chooseFolderLang("", false, false)
 	}
 	if r.etPath, err = findExifTool(o.ExifTool); err != nil {
-		return fmt.Errorf("exiftool не найден: %v", err)
+		if len(embeddedExifTool) > 0 && o.ExifTool == "" {
+			return r.L.E("err.exifembed", err)
+		}
+		return r.L.E("err.exiftool", err)
 	}
-	r.logf("exiftool: %s", r.etPath)
+	r.log(r.L.T("log.exiftool", r.etPath))
 
 	// 1. scan
-	p.set(func(p *Progress) { p.Phase = "Сканирование источников" })
-	sr := scanSources(o.Sources, func(s string) { p.set(func(p *Progress) { p.Current = s }) })
+	p.set(func(p *Progress) { p.Phase = r.L.T("phase.scan") })
+	sr := scanSources(o.Sources, func(s string) { p.set(func(p *Progress) { p.Current = s }) }, r.cancelled)
 	defer func() {
 		for _, z := range sr.Zips {
 			z.Close()
 		}
 	}()
-	for _, e := range sr.Errs {
-		r.logf("ПРЕДУПРЕЖДЕНИЕ: %s", e)
+	if r.cancelled() || sr.Cancelled {
+		return errCancelled
 	}
-	r.logf("Найдено медиа: %d, json: %d, zip: %d", len(sr.Media), len(sr.JSON), len(sr.Zips))
+	for _, e := range sr.Errs {
+		r.log(r.L.T("log.warn", e))
+	}
+	r.log(r.L.T("log.found", len(sr.Media), len(sr.JSON), len(sr.Zips)))
 	if len(sr.Media) == 0 {
-		return errors.New("в источниках не найдено фото/видео")
+		return r.L.E("err.nomedia")
 	}
 
 	// 2. CRC for plain files, detect incomplete extracted copies
@@ -219,7 +247,7 @@ func Run(o Options, p *Progress) (err error) {
 	}
 	if len(plain) > 0 {
 		p.set(func(p *Progress) {
-			p.Phase = "Проверка распакованных файлов"
+			p.Phase = r.L.T("phase.check")
 			p.Total = int64(len(plain))
 			p.Done = 0
 		})
@@ -230,10 +258,16 @@ func Run(o Options, p *Progress) (err error) {
 			go func() {
 				defer wg.Done()
 				for e := range ch {
-					c, err := fileCRC(e.FSPath)
+					if r.cancelled() {
+						continue
+					}
+					c, err := fileCRC(e.FSPath, r.cancelled)
+					if errors.Is(err, errCancelled) || r.cancelled() {
+						continue
+					}
 					if err != nil {
 						e.Incomplete = true
-						r.logf("ОШИБКА чтения %s: %v", e.FSPath, err)
+						r.log(r.L.T("log.readerr", e.FSPath, err))
 					}
 					e.CRC = c
 					p.set(func(p *Progress) { p.Done++; p.Current = e.FSPath })
@@ -241,10 +275,16 @@ func Run(o Options, p *Progress) (err error) {
 			}()
 		}
 		for _, e := range plain {
+			if r.cancelled() {
+				break
+			}
 			ch <- e
 		}
 		close(ch)
 		wg.Wait()
+		if r.cancelled() {
+			return errCancelled
+		}
 		for _, e := range plain {
 			if zs, ok := zipIdx[relKey(e)]; ok {
 				same := false
@@ -270,15 +310,21 @@ func Run(o Options, p *Progress) (err error) {
 
 	// 3. sidecars
 	p.set(func(p *Progress) {
-		p.Phase = "Чтение JSON-метаданных"
+		p.Phase = r.L.T("phase.json")
 		p.Total = int64(len(sr.JSON))
 		p.Done = 0
 	})
 	mi := newMetaIndex()
 	sort.SliceStable(sr.JSON, func(i, j int) bool { return sr.JSON[i].ZF != nil && sr.JSON[j].ZF == nil })
 	for _, e := range sr.JSON {
+		if r.cancelled() {
+			return errCancelled
+		}
 		mi.addJSON(e)
 		p.set(func(p *Progress) { p.Done++ })
+	}
+	if r.cancelled() {
+		return errCancelled
 	}
 	var kept []*Entry
 	editedSkipped := 0
@@ -305,7 +351,7 @@ func Run(o Options, p *Progress) (err error) {
 			r.unmatched = append(r.unmatched, sc)
 		}
 	}
-	r.groups = buildGroups(kept, mi)
+	r.groups = buildGroups(kept, mi, r.folders)
 	for _, g := range r.groups {
 		if g.SC == nil {
 			r.noJSON = append(r.noJSON, g)
@@ -328,30 +374,33 @@ func Run(o Options, p *Progress) (err error) {
 			}
 		}
 	}
-	r.logf("Уникальных файлов: %d (%.2f ГБ), дубликатов: %d, недораспакованных копий пропущено: %d", r.st.Unique, gb(r.st.UniqueBytes), r.st.Duplicates, r.st.Incomplete)
+	r.log(r.L.T("log.unique", r.st.Unique, gb(r.st.UniqueBytes), r.st.Duplicates, r.st.Incomplete))
 
 	// 4. disk space
 	if free, e := freeSpace(existingParent(o.Dest)); e == nil {
 		r.st.FreeBytes = int64(free)
 		if r.st.NeedBytes > int64(free)-200<<20 {
-			w := fmt.Sprintf("Недостаточно места: нужно ≈%.1f ГБ, свободно %.1f ГБ", gb(r.st.NeedBytes), gb(int64(free)))
-			r.logf("ПРЕДУПРЕЖДЕНИЕ: %s", w)
+			w := r.L.T("err.diskshort", gb(r.st.NeedBytes), gb(int64(free)))
+			r.log(r.L.T("log.warn", w))
 			p.set(func(p *Progress) { p.Warning = w })
 			if !o.DryRun && !o.Force {
 				r.writeReport()
-				return errors.New(w + ". Освободите место или включите «всё равно продолжить».")
+				return r.L.E("err.diskmore", w)
 			}
 		}
 	}
 
 	// 5. process
+	if r.cancelled() {
+		return errCancelled
+	}
 	err = r.process()
 	r.saveState(true)
 	r.writeReport()
 	if !o.DryRun {
 		os.RemoveAll(filepath.Join(r.outDir, "tmp"))
 	}
-	r.logf("=== Завершено. Скопировано %d, уже было %d, ошибок %d", r.st.Copied, r.st.Resumed, r.st.Errors)
+	r.log(r.L.T("log.done", r.st.Copied, r.st.Resumed, r.st.Errors))
 	return err
 }
 
@@ -411,9 +460,9 @@ func (r *Runner) process() error {
 		ch <- q
 	}
 	close(ch)
-	phase := "Копирование и запись метаданных"
+	phase := r.L.T("phase.copy")
 	if o.DryRun {
-		phase = "Пробный прогон (ничего не записывается)"
+		phase = r.L.T("phase.dry")
 	}
 	start := time.Now()
 	r.p.set(func(p *Progress) {
@@ -434,21 +483,34 @@ func (r *Runner) process() error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			if r.cancelled() {
+				return
+			}
 			et, err := startExifTool(r.etPath)
 			if err != nil {
+				if r.cancelled() {
+					return
+				}
 				emu.Lock()
-				firstErr = err
+				if firstErr == nil {
+					firstErr = r.L.E("err.exifstart", r.etPath, err)
+				}
 				emu.Unlock()
 				return
 			}
 			defer et.Close()
+			stopWatch := r.watchExif(et)
+			defer stopWatch()
 			for q := range ch {
 				for _, g := range q {
-					if r.p.cancel.Load() {
+					if r.cancelled() {
 						return
 					}
 					r.p.set(func(p *Progress) { p.Current = g.Canon.Display() })
 					r.processGroup(et, g)
+					if r.cancelled() {
+						return
+					}
 					r.p.set(func(p *Progress) {
 						p.Done++
 						p.BytesDone += g.Size
@@ -463,13 +525,35 @@ func (r *Runner) process() error {
 		}()
 	}
 	wg.Wait()
+	if r.cancelled() {
+		return errCancelled
+	}
 	if firstErr != nil {
 		return firstErr
 	}
-	if r.p.cancel.Load() {
-		return errCancelled
-	}
 	return nil
+}
+
+// watchExif kills this worker's exiftool soon after Stop, so a -stay_open
+// command blocked in readUntil returns instead of running to the end.
+func (r *Runner) watchExif(et *ExifTool) func() {
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(200 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				if r.cancelled() {
+					et.Kill()
+					return
+				}
+			}
+		}
+	}()
+	return func() { close(done) }
 }
 
 // alloc reserves a free path dir/name (adds _1, _2...). same(p) reports an existing file that is already ours.
@@ -500,12 +584,12 @@ func (r *Runner) alloc(dir, name string, same func(string) bool) (string, bool) 
 	}
 }
 
-func (r *Runner) fail(g *Group, format string, a ...any) {
-	msg := fmt.Sprintf(format, a...)
-	g.Err = strings.TrimSpace(strings.TrimSpace(g.Err + "; " + msg)[0:])
+func (r *Runner) fail(g *Group, msg string) {
+	msg = strings.TrimSpace(msg)
+	g.Err = strings.TrimSpace(g.Err + "; " + msg)
 	g.Err = strings.TrimPrefix(g.Err, "; ")
 	r.stat(func(s *Stats) { s.Errors++ })
-	r.logf("ОШИБКА [%s]: %s", g.Canon.Display(), msg)
+	r.log(r.L.T("log.errfile", g.Canon.Display(), msg))
 }
 
 func (r *Runner) processGroup(et *ExifTool, g *Group) {
@@ -518,7 +602,7 @@ func (r *Runner) processGroup(et *ExifTool, g *Group) {
 			r.resMu.Lock()
 			r.reserved[strings.ToLower(full)] = true
 			r.resMu.Unlock()
-			g.Path, g.Status, g.DateSrc = full, "уже было", rec.Src
+			g.Path, g.Status, g.DateSrc = full, statusResumed, rec.Src
 			if t, err := time.Parse(time.RFC3339, rec.Date); err == nil {
 				g.Date = t.In(r.loc)
 			}
@@ -541,27 +625,45 @@ func (r *Runner) processGroup(et *ExifTool, g *Group) {
 			os.MkdirAll(tdir, 0o755)
 		}
 		tmp = filepath.Join(tdir, g.Key+strings.ToLower(filepath.Ext(g.Name)))
-		if err := copyEntry(g.Canon, tmp); err != nil {
+		if err := copyEntry(g.Canon, tmp, r.L, r.cancelled); err != nil {
 			os.Remove(tmp)
+			if errors.Is(err, errCancelled) || r.cancelled() {
+				return
+			}
 			// try another copy of the same content
 			okAlt := false
 			for _, e := range g.Members {
-				if e != g.Canon && copyEntry(e, tmp) == nil {
+				if r.cancelled() {
+					return
+				}
+				if e != g.Canon && copyEntry(e, tmp, r.L, r.cancelled) == nil {
 					okAlt = true
 					break
 				}
 			}
 			if !okAlt {
-				g.Status = "ошибка"
-				r.fail(g, "чтение: %v", err)
+				os.Remove(tmp)
+				if r.cancelled() {
+					return
+				}
+				g.Status = statusError
+				r.fail(g, r.L.T("err.read", err))
 				return
 			}
 		}
+		if r.cancelled() {
+			os.Remove(tmp)
+			return
+		}
 		tags = et.ReadTags(tmp)
+		if r.cancelled() {
+			os.Remove(tmp)
+			return
+		}
 	}
 	r.decideDate(g, tags)
 	r.countDate(g)
-	dir := filepath.Join(dest, mainDir(g, o.Layout))
+	dir := filepath.Join(dest, mainDir(g, o.Layout, r.folders))
 	name := g.Name
 	if o.Rename && (g.DateSrc == "json" || g.DateSrc == "exif" || g.DateSrc == "filename") {
 		name = g.Date.Format("2006-01-02_150405_") + name
@@ -572,29 +674,37 @@ func (r *Runner) processGroup(et *ExifTool, g *Group) {
 		r.stat(func(s *Stats) { s.Trash++ })
 	}
 	if o.DryRun {
-		g.Status = "будет скопирован"
+		g.Status = statusWillCopy
 		r.dryCountMeta(g, tags)
 		r.stat(func(s *Stats) { s.Copied++ })
 		r.makeLinks(g)
 		return
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		g.Status = "ошибка"
-		r.fail(g, "создание папки: %v", err)
+		g.Status = statusError
+		r.fail(g, r.L.T("err.mkdir", err))
 		os.Remove(tmp)
 		return
 	}
 	if err := os.Rename(tmp, final); err != nil {
-		g.Status = "ошибка"
-		r.fail(g, "перемещение: %v", err)
+		g.Status = statusError
+		r.fail(g, r.L.T("err.move", err))
 		os.Remove(tmp)
 		return
 	}
-	g.Status = "скопирован"
+	g.Status = statusCopied
 	r.writeMeta(et, g, tags)
+	// Stop before the file is recorded: drop the partial copy so a re-run
+	// writes it once, instead of leaving a second name beside it.
+	if r.cancelled() {
+		os.Remove(final)
+		os.Remove(final + ".xmp")
+		g.Path, g.Status = "", ""
+		return
+	}
 	if !g.Date.IsZero() {
 		if err := setFileTimes(final, g.Date); err != nil {
-			r.logf("не удалось установить время файла %s: %v", final, err)
+			r.log(r.L.T("log.mtime", final, err))
 		}
 	}
 	r.stat(func(s *Stats) { s.Copied++ })
@@ -611,7 +721,7 @@ func (r *Runner) processGroup(et *ExifTool, g *Group) {
 	r.makeLinks(g)
 }
 
-func copyEntry(e *Entry, dst string) error {
+func copyEntry(e *Entry, dst string, L Lang, stop func() bool) error {
 	rc, err := e.Open()
 	if err != nil {
 		return err
@@ -621,14 +731,41 @@ func copyEntry(e *Entry, dst string) error {
 	if err != nil {
 		return err
 	}
-	n, err := io.Copy(f, rc)
+	n, err := copyStream(f, rc, stop)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
+	if errors.Is(err, errCancelled) || (stop != nil && stop()) {
+		return errCancelled
+	}
 	if err == nil && n != e.Size {
-		err = fmt.Errorf("размер %d вместо %d", n, e.Size)
+		err = L.E("err.size", n, e.Size)
 	}
 	return err
+}
+
+func copyStream(dst io.Writer, src io.Reader, stop func() bool) (int64, error) {
+	buf := make([]byte, 256<<10)
+	var n int64
+	for {
+		if stop != nil && stop() {
+			return n, errCancelled
+		}
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			nw, ew := dst.Write(buf[:nr])
+			n += int64(nw)
+			if ew != nil {
+				return n, ew
+			}
+		}
+		if er != nil {
+			if er == io.EOF {
+				return n, nil
+			}
+			return n, er
+		}
+	}
 }
 
 func (r *Runner) decideDate(g *Group, tags map[string]string) {
@@ -693,7 +830,7 @@ func (r *Runner) dryCountMeta(g *Group, tags map[string]string) {
 
 func (r *Runner) makeLinks(g *Group) {
 	o := r.o
-	if o.Albums == "none" || g.Path == "" || g.Status == "ошибка" {
+	if o.Albums == "none" || g.Path == "" || g.Status == statusError {
 		return
 	}
 	cst, err := os.Stat(g.Path)
@@ -701,10 +838,13 @@ func (r *Runner) makeLinks(g *Group) {
 		return
 	}
 	for i, a := range g.Albums {
+		if r.cancelled() {
+			return
+		}
 		if o.Layout == "album" && i == 0 {
 			continue
 		}
-		dir := filepath.Join(o.Dest, albumRoot(o.Layout), sanitize(a))
+		dir := filepath.Join(o.Dest, albumRoot(o.Layout, r.folders), sanitize(a))
 		if filepath.Dir(g.Path) == dir {
 			continue
 		}
@@ -734,11 +874,14 @@ func (r *Runner) makeLinks(g *Group) {
 				r.stat(func(s *Stats) { s.AlbumLinks++ })
 				continue
 			} else {
-				r.logf("жёсткая ссылка не удалась (%v), копирую: %s", err, p)
+				r.log(r.L.T("log.hardlink", err, p))
 			}
 		}
-		if err := copyFile(g.Path, p); err != nil {
-			r.fail(g, "альбом %s: %v", a, err)
+		if err := copyFile(g.Path, p, r.cancelled); err != nil {
+			if errors.Is(err, errCancelled) || r.cancelled() {
+				return
+			}
+			r.fail(g, r.L.T("err.album", a, err))
 			continue
 		}
 		if !g.Date.IsZero() {
@@ -748,7 +891,7 @@ func (r *Runner) makeLinks(g *Group) {
 	}
 }
 
-func copyFile(src, dst string) error {
+func copyFile(src, dst string, stop func() bool) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -758,7 +901,7 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	if _, err = io.Copy(out, in); err != nil {
+	if _, err = copyStream(out, in, stop); err != nil {
 		out.Close()
 		os.Remove(dst)
 		return err
@@ -776,9 +919,70 @@ func (r *Runner) saveState(force bool) {
 		return
 	}
 	r.stDirty = 0
-	b, _ := json.MarshalIndent(r.state, "", " ")
+	files := r.state
+	if files == nil {
+		files = map[string]stateRec{}
+	}
+	b, _ := json.MarshalIndent(diskState{Lang: string(r.folderLang), Files: files}, "", " ")
 	tmp := filepath.Join(r.outDir, "state.json.tmp")
 	if os.WriteFile(tmp, b, 0o644) == nil {
 		os.Rename(tmp, filepath.Join(r.outDir, "state.json"))
+	}
+}
+
+// diskState is _restore/state.json. Lang is the folder-name language for this
+// destination and is kept on later runs so a library is not split across two schemes.
+// Files is the resume map. Older builds stored that map at the top level; loadState still reads it.
+type diskState struct {
+	Lang  string              `json:"lang,omitempty"`
+	Files map[string]stateRec `json:"files,omitempty"`
+}
+
+func loadState(path string) (stored Lang, hasLang bool, files map[string]stateRec, legacy bool, ok bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", false, nil, false, false
+	}
+	var probe map[string]json.RawMessage
+	if json.Unmarshal(b, &probe) != nil {
+		return "", false, nil, false, false
+	}
+	files = map[string]stateRec{}
+	if _, has := probe["files"]; has {
+		var ds diskState
+		if json.Unmarshal(b, &ds) != nil {
+			return "", false, nil, false, false
+		}
+		if ds.Files != nil {
+			files = ds.Files
+		}
+		stored, hasLang = parseLang(ds.Lang)
+		return stored, hasLang, files, false, true
+	}
+	if json.Unmarshal(b, &files) != nil || files == nil {
+		files = map[string]stateRec{}
+	}
+	return "", false, files, true, true
+}
+
+// chooseFolderLang picks the naming scheme for this destination.
+// A language saved in state.json wins. Otherwise existing folders are sniffed.
+// A legacy state file with no language marker (Russian-only builds) stays Russian.
+func (r *Runner) chooseFolderLang(stored Lang, hasLang, legacy bool) {
+	switch {
+	case hasLang:
+		r.folderLang = stored
+	default:
+		if det, ok := detectFolderLang(r.o.Dest); ok {
+			r.folderLang = det
+		} else if legacy {
+			r.folderLang = LangRU
+		} else {
+			r.folderLang = r.L
+		}
+	}
+	r.folders = r.folderLang.Folders()
+	if r.folderLang != r.L {
+		r.log(r.L.T("log.lock." + string(r.folderLang) + "." + string(r.L)))
 	}
 }

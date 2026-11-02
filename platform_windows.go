@@ -55,10 +55,13 @@ func openFolder(p string) error {
 	return exec.Command("explorer", p).Start()
 }
 
-func pickFolder() (string, error) {
+func folderPickerAvailable() bool { return true }
+
+func pickFolder(title string) (string, error) {
+	title = strings.ReplaceAll(title, "'", "''")
 	script := `Add-Type -AssemblyName System.Windows.Forms;` +
 		`$o=New-Object System.Windows.Forms.Form -Property @{TopMost=$true;ShowInTaskbar=$false};` +
-		`$f=New-Object System.Windows.Forms.FolderBrowserDialog;$f.Description='Выберите папку';$f.ShowNewFolderButton=$true;` +
+		`$f=New-Object System.Windows.Forms.FolderBrowserDialog;$f.Description='` + title + `';$f.ShowNewFolderButton=$true;` +
 		`[Console]::OutputEncoding=[Text.Encoding]::UTF8;` +
 		`if($f.ShowDialog($o) -eq 'OK'){[Console]::Out.Write($f.SelectedPath)}`
 	cmd := exec.Command("powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script)

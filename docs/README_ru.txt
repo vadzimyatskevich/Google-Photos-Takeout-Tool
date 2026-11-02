@@ -45,7 +45,29 @@ Google хранит время в UTC; программа переводит е�
 перезаписываются (если не включить соответствующую галочку). Для AVI/BMP рядом
 создаётся файл .xmp с метаданными. У всех файлов дата изменения/создания = дата съёмки.
 
+ЯЗЫК
+По умолчанию интерфейс и названия папок английские: Albums, No date, _Trash,
+Archive, Unknown month. Переключатель EN / RU — вверху страницы, выбор
+запоминается. В командной строке: -lang ru или -lang en (справка на русском:
+TakeoutRestore.exe -lang ru -h).
+Для уже созданной папки назначения имена папок не меняются при смене языка:
+язык папок записан в _restore/state.json, чтобы библиотека не разъехалась на
+две схемы. Сообщения и отчёт идут на языке текущего запуска.
+С -lang ru (или кнопкой RU) папки называются так, как в разделе «ЧТО ПОЛУЧИТСЯ».
+
+LINUX
+Нужен системный exiftool (в Linux-сборку он не встроен):
+  Debian/Ubuntu: sudo apt install libimage-exiftool-perl
+  Fedora: sudo dnf install perl-Image-ExifTool
+  Arch: sudo pacman -S perl-image-exiftool
+Распакуйте архив, выполните chmod +x TakeoutRestore и запустите ./TakeoutRestore
+(откроется браузер через xdg-open, иначе адрес будет в терминале). Пример:
+  ./TakeoutRestore -src ~/Takeout -dest ~/Photos-Restored -dry-run -lang ru
+Кнопки выбора папки появляются, если установлен zenity или kdialog; иначе путь
+можно вставить вручную. Жёсткие ссылки альбомов работают на той же файловой системе.
+Сборка из исходников (Go 1.21+): go build -o TakeoutRestore .
+
 КОМАНДНАЯ СТРОКА (необязательно)
   TakeoutRestore.exe -src "D:\Google Photo Vadzim" -dest "D:\Фото (восстановлено)" -dry-run
-  TakeoutRestore.exe -src "D:\Google Photo Vadzim" -dest "D:\Фото (восстановлено)"
+  TakeoutRestore.exe -src "D:\Google Photo Vadzim" -dest "D:\Фото (восстановлено)" -lang ru
   Все параметры: TakeoutRestore.exe -h

@@ -151,6 +151,9 @@ func (r *Runner) writeMetaX(et *ExifTool, g *Group, tags map[string]string, forc
 	so, se, err := et.Run(full...)
 	ok := err == nil && (strings.Contains(so, "1 image files updated") || strings.Contains(so, "1 image files created"))
 	if !ok {
+		if r.p.cancel.Load() {
+			return
+		}
 		if strings.Contains(so, "1 image files unchanged") {
 			return
 		}
@@ -158,7 +161,7 @@ func (r *Runner) writeMetaX(et *ExifTool, g *Group, tags map[string]string, forc
 		if err != nil {
 			msg = err.Error()
 		}
-		r.fail(g, "exiftool: %s", oneLine(msg))
+		r.fail(g, r.L.T("err.exifline", oneLine(msg)))
 		if !sidecar && o.XMPSidecar {
 			r.writeMetaX(et, g, nil, true)
 		}

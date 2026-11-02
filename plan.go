@@ -24,11 +24,12 @@ type Options struct {
 	DryRun        bool     `json:"dryRun"`
 	Force         bool     `json:"force"`
 	Workers       int      `json:"workers"`
+	Lang          string   `json:"lang"`
 	ExifTool      string   `json:"-"`
 }
 
 func defaultOptions() Options {
-	return Options{Layout: "ym", Albums: "hardlink", TZ: "local", XMPSidecar: true, Rating: true, AlbumKeywords: true, People: true}
+	return Options{Layout: "ym", Albums: "hardlink", TZ: "local", XMPSidecar: true, Rating: true, AlbumKeywords: true, People: true, Lang: "en"}
 }
 
 type Group struct {
@@ -94,12 +95,12 @@ func sanitize(s string) string {
 	return s
 }
 
-func albumDisplay(dir string, mi *MetaIndex) string {
+func albumDisplay(dir string, mi *MetaIndex, f Folders) string {
 	if t, ok := mi.AlbumTitles[strings.ToLower(dir)]; ok && strings.TrimSpace(t) != "" {
 		return strings.TrimSpace(t)
 	}
 	if isArchiveDir(dir) {
-		return "Архив"
+		return f.Archive
 	}
 	return dir
 }
@@ -118,7 +119,7 @@ func matchRank(how string) int {
 	return 9
 }
 
-func buildGroups(media []*Entry, mi *MetaIndex) []*Group {
+func buildGroups(media []*Entry, mi *MetaIndex, f Folders) []*Group {
 	byKey := map[string]*Group{}
 	var order []*Group
 	for _, e := range media {
@@ -149,7 +150,7 @@ func buildGroups(media []*Entry, mi *MetaIndex) []*Group {
 			}
 			trashOnly = false
 			if e.Dir != "" {
-				a := albumDisplay(e.Dir, mi)
+				a := albumDisplay(e.Dir, mi, f)
 				if !albums[a] {
 					albums[a] = true
 					g.Albums = append(g.Albums, a)
@@ -200,9 +201,9 @@ func nameScore(n string) int {
 }
 
 // mainDir returns the folder (relative to dest) for the group's physical copy.
-func mainDir(g *Group, layout string) string {
+func mainDir(g *Group, layout string, f Folders) string {
 	if g.Trash {
-		return "_Корзина"
+		return f.Trash
 	}
 	t := g.Date
 	switch g.DateSrc {
@@ -210,7 +211,7 @@ func mainDir(g *Group, layout string) string {
 		if layout == "album" && len(g.Albums) > 0 {
 			return sanitize(g.Albums[0])
 		}
-		return "Без даты"
+		return f.NoDate
 	case "year":
 		y := fmt.Sprintf("%04d", g.Year)
 		if layout == "album" {
@@ -222,7 +223,7 @@ func mainDir(g *Group, layout string) string {
 		if layout == "y" {
 			return y
 		}
-		return filepath.Join(y, "Месяц неизвестен")
+		return filepath.Join(y, f.UnknownMonth)
 	}
 	y := t.Format("2006")
 	switch layout {
@@ -241,9 +242,9 @@ func mainDir(g *Group, layout string) string {
 	return filepath.Join(y, t.Format("2006-01"))
 }
 
-func albumRoot(layout string) string {
+func albumRoot(layout string, f Folders) string {
 	if layout == "album" {
 		return ""
 	}
-	return "Альбомы"
+	return f.Albums
 }
