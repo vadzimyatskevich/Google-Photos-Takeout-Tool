@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>Восстановление Google Фото</title>
+<style>
+*{box-sizing:border-box}body{font-family:"Segoe UI",Arial,sans-serif;background:#f4f6f8;margin:0;color:#1f2328}
+.wrap{max-width:860px;margin:24px auto;padding:0 16px}h1{font-size:22px;margin:0 0 4px}.sub{color:#666;margin-bottom:18px}
+.card{background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:18px 20px;margin-bottom:14px}
+h2{font-size:15px;margin:0 0 10px}label{display:block;margin:6px 0}textarea,input[type=text],select{width:100%;padding:8px;border:1px solid #ccd;border-radius:6px;font:inherit}
+textarea{height:80px}.row{display:flex;gap:8px;align-items:center}.row>*{flex:1}.row>button{flex:0 0 auto}
+button{padding:9px 16px;border:0;border-radius:6px;background:#e7ebef;font:inherit;cursor:pointer}button:hover{filter:brightness(.95)}
+button.primary{background:#1a73e8;color:#fff}button.go{background:#188038;color:#fff}button:disabled{opacity:.5;cursor:default}
+.opts label{display:flex;gap:8px;align-items:flex-start}.opts input{margin-top:4px}.hint{color:#777;font-size:13px}
+.bar{height:14px;background:#e6e9ee;border-radius:7px;overflow:hidden}.bar>div{height:100%;background:#1a73e8;width:0;transition:width .3s}
+.warn{background:#fff4e5;border:1px solid #f0c36d;padding:8px 10px;border-radius:6px;margin:8px 0}.err{background:#fde8e8;border:1px solid #f5a3a3;padding:8px 10px;border-radius:6px;margin:8px 0}
+table{border-collapse:collapse;width:100%}td{padding:3px 6px;border-bottom:1px solid #eee;font-size:14px}td.n{text-align:right}
+.cur{font-size:12px;color:#555;word-break:break-all;min-height:16px}a{color:#1a73e8;cursor:pointer}
+</style></head><body><div class="wrap">
+<h1>Восстановление фото из Google Takeout</h1>
+<div class="sub">Файлы читаются прямо из zip-архивов, метаданные из JSON записываются в фото и видео. Исходные файлы не изменяются.</div>
+
+<div class="card"><h2>1. Источники</h2>
+<div class="hint">Папки с архивами takeout-*.zip, отдельные zip-файлы или уже распакованные папки — по одному пути в строке. Дубликаты между выгрузками убираются автоматически.</div>
+<textarea id="src" placeholder="D:\Google Photo Vadzim"></textarea>
+<div class="row" style="margin-top:6px"><span></span><button onclick="pick('src')">Добавить папку…</button></div></div>
+
+<div class="card"><h2>2. Куда сохранить</h2>
+<div class="row"><input type="text" id="dest" placeholder="D:\Фото (восстановлено)"><button onclick="pick('dest')">Выбрать…</button></div>
+<div class="hint">Папки альбомов не занимают лишнего места (жёсткие ссылки NTFS), а сами фото копируются один раз. Нужно свободное место примерно равное объёму фото.</div></div>
+
+<div class="card opts"><h2>3. Структура и параметры</h2>
+<label style="display:block">Структура папок
+<select id="layout">
+<option value="ym">ГГГГ\ГГГГ-ММ (2021\2021-05)</option>
+<option value="y_m">ГГГГ\ММ (2021\05)</option>
+<option value="ymd">ГГГГ\ГГГГ-ММ-ДД (2021\2021-05-24)</option>
+<option value="y">Только по годам (2021)</option>
+<option value="album">Только по альбомам</option>
+</select></label>
+<label style="display:block">Папки альбомов («Альбомы\Название»)
+<select id="albums">
+<option value="hardlink">Жёсткие ссылки — не занимают место (по умолчанию)</option>
+<option value="copy">Отдельные копии (займут место)</option>
+<option value="none">Не создавать папки альбомов</option>
+</select></label>
+<label style="display:block">Часовой пояс для дат из Google (они в UTC)
+<input type="text" id="tz" value="local"><span class="hint">local = часовой пояс этого компьютера; можно указать Europe/Minsk или +03:00</span></label>
+<label><input type="checkbox" id="rename"> Переименовать файлы в «ГГГГ-ММ-ДД_ЧЧММСС_имя»</label>
+<label><input type="checkbox" id="overwrite"> Перезаписывать уже имеющиеся в файле дату/GPS/описание (обычно не нужно)</label>
+<label><input type="checkbox" id="skipEdited"> Не копировать отредактированные версии (-edited / -изменено)</label>
+<label><input type="checkbox" id="rating" checked> Избранное → рейтинг 5 звёзд</label>
+<label><input type="checkbox" id="albumKeywords" checked> Названия альбомов → ключевые слова</label>
+<label><input type="checkbox" id="people" checked> Имена людей → ключевые слова</label>
+<label><input type="checkbox" id="xmpSidecar" checked> Для AVI/BMP создавать рядом файл .xmp с метаданными</label>
+<label><input type="checkbox" id="force"> Продолжать даже если не хватает места на диске</label>
+</div>
+
+<div class="card"><div class="row" style="justify-content:flex-start">
+<button class="primary" id="bDry" onclick="start(true)">Пробный прогон</button>
+<button class="go" id="bGo" onclick="start(false)">Начать восстановление</button>
+<button id="bStop" onclick="fetch('/api/cancel')" disabled>Остановить</button><span></span></div>
+<div class="hint" style="margin-top:6px">Пробный прогон ничего не записывает, но показывает, что и куда будет скопировано. Повторный запуск продолжит с места остановки.</div></div>
+
+<div class="card" id="pc" style="display:none"><h2 id="phase">—</h2>
+<div class="bar"><div id="barf"></div></div>
+<div class="row" style="margin-top:6px"><span id="cnt"></span><span id="eta" style="text-align:right"></span></div>
+<div class="cur" id="cur"></div><div id="msg"></div><div id="sum"></div></div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const flags=['rename','overwrite','skipEdited','rating','albumKeywords','people','xmpSidecar','force'];
+try{const s=JSON.parse(localStorage.getItem('tr')||'{}');if(s.src)$('src').value=s.src;if(s.dest)$('dest').value=s.dest;if(s.layout)$('layout').value=s.layout;if(s.albums)$('albums').value=s.albums;}catch(e){}
+async function pick(id){const r=await (await fetch('/api/pick')).json();if(!r.path){if(r.error)alert('Окно выбора папки недоступно: '+r.error+'\nВставьте путь вручную.');return}
+ if(id=='src'){$('src').value=($('src').value.trim()?$('src').value.trim()+'\n':'')+r.path}else $(id).value=r.path}
+async function start(dry){
+ const o={sources:$('src').value.split('\n').map(s=>s.trim().replace(/^"|"$/g,'')).filter(Boolean),dest:$('dest').value.trim().replace(/^"|"$/g,''),layout:$('layout').value,albums:$('albums').value,tz:$('tz').value,dryRun:dry};
+ flags.forEach(f=>o[f]=$(f).checked);
+ if(!o.sources.length){alert('Добавьте хотя бы один источник');return}if(!o.dest){alert('Укажите папку назначения');return}
+ localStorage.setItem('tr',JSON.stringify({src:$('src').value,dest:o.dest,layout:o.layout,albums:o.albums}));
+ const r=await (await fetch('/api/start',{method:'POST',body:JSON.stringify(o)})).json();if(r.error){alert(r.error);return}
+ $('pc').style.display='';poll();}
+const gbf=b=>(b/1073741824).toFixed(2)+' ГБ';
+function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+async function poll(){
+ const s=await (await fetch('/api/status')).json();
+ $('pc').style.display='';$('phase').textContent=(s.dryRun?'[Пробный прогон] ':'')+s.phase;
+ const pct=s.bytesTotal?100*s.bytesDone/s.bytesTotal:(s.total?100*s.done/s.total:0);$('barf').style.width=pct.toFixed(1)+'%';
+ $('cnt').textContent=s.total?`${s.done} из ${s.total} файлов`+(s.bytesTotal?` · ${gbf(s.bytesDone)} из ${gbf(s.bytesTotal)}`:''):'';
+ $('eta').textContent=s.running&&s.eta?'осталось ≈ '+s.eta.replace('h',' ч ').replace('m',' мин ').replace(/([\d.]+)s/,'$1 с'):'';
+ $('cur').textContent=s.running?(s.current||''):'';
+ let m='';if(s.warning)m+=`<div class="warn">⚠ ${esc(s.warning)}</div>`;if(s.error)m+=`<div class="err">${esc(s.error)}</div>`;$('msg').innerHTML=m;
+ $('bDry').disabled=$('bGo').disabled=s.running;$('bStop').disabled=!s.running;
+ if(s.finished&&s.stats){const t=s.stats;const rows=[['Найдено медиафайлов (всех копий)',t.MediaEntries],['Уникальных',t.Unique+' ('+gbf(t.UniqueBytes)+')'],['Дубликатов пропущено',t.Duplicates],['Недораспакованных копий пропущено',t.Incomplete],
+  [s.dryRun?'Будет скопировано':'Скопировано',t.Copied],['Уже было (повторный запуск)',t.Resumed],['Дата из JSON',t.DateJSON],['Дата из EXIF',t.DateEXIF],['Дата из имени файла',t.DateName],['Только год',t.DateYear],['Без даты',t.DateNone],
+  ['GPS '+(s.dryRun?'будет записан':'записан'),t.GPSWritten],['Ссылок/копий в альбомах',t.AlbumLinks+t.AlbumCopies],['Файлов без JSON',t.MediaNoJSON],['JSON без файла',t.JSONUnmatched],['Ошибок',t.Errors],['Нужно места / свободно',gbf(t.NeedBytes)+' / '+gbf(t.FreeBytes)]];
+  $('sum').innerHTML='<h2 style="margin-top:14px">Итог</h2><table>'+rows.map(r=>`<tr><td>${r[0]}</td><td class="n">${r[1]}</td></tr>`).join('')+'</table><p>'+
+  (s.report?'<a href="/report" target="_blank">Открыть отчёт</a> · ':'')+(s.log?'<a href="/log" target="_blank">Журнал</a> · ':'')+(!s.dryRun?'<a onclick="fetch(\'/api/open?what=dest\')">Открыть папку с фото</a>':'')+'</p>';}
+ else $('sum').innerHTML='';
+ if(s.running)setTimeout(poll,700);}
+poll();
+</script></body></html>
