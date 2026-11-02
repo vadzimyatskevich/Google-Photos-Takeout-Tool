@@ -15,7 +15,15 @@ type Lang string
 const (
 	LangEN Lang = "en"
 	LangRU Lang = "ru"
+	LangDE Lang = "de"
+	LangFR Lang = "fr"
+	LangES Lang = "es"
+	LangPL Lang = "pl"
+	LangLT Lang = "lt"
 )
+
+// SupportedLangs is the UI / -lang order shown to users.
+var SupportedLangs = []Lang{LangEN, LangRU, LangDE, LangFR, LangES, LangPL, LangLT}
 
 // errNoPicker is returned when this OS has no folder dialog available.
 var errNoPicker = errors.New("no folder dialog")
@@ -70,6 +78,16 @@ func parseLang(s string) (Lang, bool) {
 		return LangRU, true
 	case "en", "eng", "english":
 		return LangEN, true
+	case "de", "deu", "ger", "german", "deutsch":
+		return LangDE, true
+	case "fr", "fra", "fre", "french", "français", "francais":
+		return LangFR, true
+	case "es", "spa", "spanish", "español", "espanol":
+		return LangES, true
+	case "pl", "pol", "polish", "polski":
+		return LangPL, true
+	case "lt", "lit", "lithuanian", "lietuvių", "lietuviu":
+		return LangLT, true
 	default:
 		return "", false
 	}
@@ -183,6 +201,11 @@ func hasSubdirNamed(dest, name string) bool {
 var catalogs = map[Lang]map[string]string{
 	LangEN: enMsg,
 	LangRU: ruMsg,
+	LangDE: deMsg,
+	LangFR: frMsg,
+	LangES: esMsg,
+	LangPL: plMsg,
+	LangLT: ltMsg,
 }
 
 var enMsg = map[string]string{
@@ -206,7 +229,8 @@ var enMsg = map[string]string{
 	"flag.exiftool":       "path to exiftool (Windows: built-in; Linux/macOS: on PATH)",
 	"flag.port":           "web interface port (0 = random)",
 	"flag.no-browser":     "do not open a browser",
-	"flag.lang":           "language: en | ru (default en)",
+	"flag.web":            "use the localhost browser UI instead of the desktop window",
+	"flag.lang":           "language: en | ru | de | fr | es | pl | lt (default en)",
 
 	"cli.summary": "\nUnique: %d, duplicates: %d, copied: %d, already there: %d, errors: %d\nDates: json %d, exif %d, filename %d, year %d, none %d; GPS %d\n",
 	"cli.report":  "Report: %s",
@@ -230,6 +254,11 @@ var enMsg = map[string]string{
 	"phase.json":     "Reading JSON metadata",
 	"phase.copy":     "Copying and writing metadata",
 	"phase.dry":      "Dry run (nothing is written)",
+	"phase.paused":   "Paused",
+
+	"progress.copy":      "copying…",
+	"progress.meta.read": "reading metadata…",
+	"progress.meta.write": "writing metadata…",
 
 	"err.cancelled":  "stopped by the user",
 	"err.internal":   "internal error: %v",
@@ -264,8 +293,8 @@ var enMsg = map[string]string{
 	"log.hardlink":   "hard link failed (%v), copying: %s",
 	"log.report":     "Report: %s",
 	"log.stopped":    "Stopped by the user. Files already written are kept; run again to continue.",
-	"log.lock.ru.en": "This destination already uses Russian folder names (Альбомы, Без даты, _Корзина, Архив, Месяц неизвестен). Keeping them so the library is not split. Messages and the report stay in English.",
-	"log.lock.en.ru": "This destination already uses English folder names (Albums, No date, _Trash, Archive, Unknown month). Keeping them so the library is not split. Messages and the report stay in Russian.",
+	"log.lock.ru": "This destination already uses Russian folder names (Альбомы, Без даты, _Корзина, Архив, Месяц неизвестен). Keeping them so the library is not split. Messages and the report use the selected language.",
+	"log.lock.en": "This destination already uses English folder names (Albums, No date, _Trash, Archive, Unknown month). Keeping them so the library is not split. Messages and the report use the selected language.",
 
 	"status.copied":    "copied",
 	"status.resumed":   "already there",
@@ -361,7 +390,8 @@ var ruMsg = map[string]string{
 	"flag.exiftool":       "путь к exiftool (Windows: встроенный; Linux/macOS: из PATH)",
 	"flag.port":           "порт веб-интерфейса (0 = случайный)",
 	"flag.no-browser":     "не открывать браузер",
-	"flag.lang":           "язык: en | ru (по умолчанию en)",
+	"flag.web":            "открыть веб-интерфейс в браузере вместо окна приложения",
+	"flag.lang":           "язык: en | ru | de | fr | es | pl | lt (по умолчанию en)",
 
 	"cli.summary": "\nУникальных: %d, дубликатов: %d, скопировано: %d, уже было: %d, ошибок: %d\nДаты: json %d, exif %d, имя файла %d, год %d, нет %d; GPS %d\n",
 	"cli.report":  "Отчёт: %s",
@@ -385,6 +415,11 @@ var ruMsg = map[string]string{
 	"phase.json":     "Чтение JSON-метаданных",
 	"phase.copy":     "Копирование и запись метаданных",
 	"phase.dry":      "Пробный прогон (ничего не записывается)",
+	"phase.paused":   "Пауза",
+
+	"progress.copy":       "копирование…",
+	"progress.meta.read":  "чтение метаданных…",
+	"progress.meta.write": "запись метаданных…",
 
 	"err.cancelled":  "остановлено пользователем",
 	"err.internal":   "внутренняя ошибка: %v",
@@ -419,8 +454,8 @@ var ruMsg = map[string]string{
 	"log.hardlink":   "жёсткая ссылка не удалась (%v), копирую: %s",
 	"log.report":     "Отчёт: %s",
 	"log.stopped":    "Остановлено пользователем. Уже записанные файлы сохранены; повторный запуск продолжит.",
-	"log.lock.ru.en": "Эта папка назначения уже использует русские названия (Альбомы, Без даты, _Корзина, Архив, Месяц неизвестен). Оставляем их, чтобы библиотека не разделилась. Сообщения и отчёт — на английском.",
-	"log.lock.en.ru": "Эта папка назначения уже использует английские названия (Albums, No date, _Trash, Archive, Unknown month). Оставляем их, чтобы библиотека не разделилась. Сообщения и отчёт — на русском.",
+	"log.lock.ru": "Эта папка назначения уже использует русские названия (Альбомы, Без даты, _Корзина, Архив, Месяц неизвестен). Оставляем их, чтобы библиотека не разделилась. Сообщения и отчёт — на выбранном языке.",
+	"log.lock.en": "Эта папка назначения уже использует английские названия (Albums, No date, _Trash, Archive, Unknown month). Оставляем их, чтобы библиотека не разделилась. Сообщения и отчёт — на выбранном языке.",
 
 	"status.copied":    "скопирован",
 	"status.resumed":   "уже было",

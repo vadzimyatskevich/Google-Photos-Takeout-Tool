@@ -43,12 +43,14 @@ func main() {
 	flag.StringVar(&o.Lang, "lang", "en", L.T("flag.lang"))
 	port := flag.Int("port", 0, L.T("flag.port"))
 	noBrowser := flag.Bool("no-browser", false, L.T("flag.no-browser"))
+	webUI := flag.Bool("web", false, L.T("flag.web"))
 	flag.Parse()
 	L = NormalizeLang(o.Lang)
 	o.Lang = string(L)
 	o.Sources = append(srcs, flag.Args()...)
 	if o.Dest != "" {
 		cliMode = true
+		ensureConsole()
 		p := &Progress{}
 		err := Run(o, p)
 		snap := p.snapshot()
@@ -63,5 +65,10 @@ func main() {
 		}
 		return
 	}
-	serveUI(*port, !*noBrowser, L, explicit)
+	if *webUI || !guiEnabled {
+		ensureConsole()
+		serveUI(*port, !*noBrowser, L, explicit)
+		return
+	}
+	launchGUI(L, explicit)
 }

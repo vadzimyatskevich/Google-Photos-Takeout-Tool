@@ -1,0 +1,23 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "TakeoutRestore",
+  "outputfilename": "TakeoutRestore",
+  "frontend:dir": "frontend/dist",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "",
+  "author": {
+    "name": "TakeoutRestore",
+    "email": ""
+  },
+  "info": {
+    "companyName": "TakeoutRestore",
+    "productName": "TakeoutRestore",
+    "productVersion": "0.1.0",
+    "copyright": "MIT",
+    "comments": "Google Photos Takeout metadata fixer"
+  },
+  "buildtags": "gui,desktop,production",
+  "reloaddirs": "frontend/dist,build"
+}

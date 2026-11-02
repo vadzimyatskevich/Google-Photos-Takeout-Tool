@@ -43,31 +43,74 @@ type Stats struct {
 	FreeBytes     int64
 }
 
+type PreviewItem struct {
+	Path string `json:"path"`
+	Name string `json:"name"`
+}
+
+const maxRecentPreview = 12
+
 type Progress struct {
-	mu         sync.Mutex
-	Phase      string `json:"phase"`
-	Done       int64  `json:"done"`
-	Total      int64  `json:"total"`
-	BytesDone  int64  `json:"bytesDone"`
-	BytesTotal int64  `json:"bytesTotal"`
-	Current    string `json:"current"`
-	ETA        string `json:"eta"`
-	Running    bool   `json:"running"`
-	Finished   bool   `json:"finished"`
-	DryRun     bool   `json:"dryRun"`
-	Err        string `json:"error"`
-	Warning    string `json:"warning"`
-	Report     string `json:"report"`
-	Log        string `json:"log"`
-	Dest       string `json:"dest"`
-	Lang       string `json:"lang,omitempty"`
-	Stopped    bool   `json:"stopped"`
-	Stats      *Stats `json:"stats"`
-	started    time.Time
-	cancel     atomic.Bool
+	mu          sync.Mutex
+	Phase       string        `json:"phase"`
+	Done        int64         `json:"done"`
+	Total       int64         `json:"total"`
+	BytesDone   int64         `json:"bytesDone"`
+	BytesTotal  int64         `json:"bytesTotal"`
+	FileBytes   int64         `json:"fileBytes"`
+	FileSize    int64         `json:"fileSize"`
+	Current     string        `json:"current"`
+	CurrentNote string        `json:"currentNote,omitempty"`
+	ETA         string        `json:"eta"`
+	Running     bool          `json:"running"`
+	Finished    bool          `json:"finished"`
+	DryRun      bool          `json:"dryRun"`
+	Err         string        `json:"error"`
+	Warning     string        `json:"warning"`
+	Report      string        `json:"report"`
+	Log         string        `json:"log"`
+	Dest        string        `json:"dest"`
+	Lang        string        `json:"lang,omitempty"`
+	Stopped     bool          `json:"stopped"`
+	Paused      bool          `json:"paused"`
+	Stats       *Stats        `json:"stats"`
+	Recent      []PreviewItem `json:"recent,omitempty"`
+	started     time.Time
+	phaseWork   string // last active phase (restored after Pause)
+	cancel      atomic.Bool
+	pause       atomic.Bool
 }
 
 func (p *Progress) set(f func(p *Progress)) { p.mu.Lock(); f(p); p.mu.Unlock() }
+
+func previewableImage(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".jpg", ".jpeg", ".jpe", ".png", ".gif", ".webp", ".bmp":
+		return true
+	}
+	return false
+}
+
+func (p *Progress) pushRecent(path string) {
+	if p == nil || path == "" || !previewableImage(path) {
+		return
+	}
+	item := PreviewItem{Path: path, Name: filepath.Base(path)}
+	p.set(func(p *Progress) {
+		out := make([]PreviewItem, 0, maxRecentPreview)
+		out = append(out, item)
+		for _, it := range p.Recent {
+			if it.Path == path {
+				continue
+			}
+			out = append(out, it)
+			if len(out) >= maxRecentPreview {
+				break
+			}
+		}
+		p.Recent = out
+	})
+}
 
 func (p *Progress) snapshot() map[string]any {
 	p.mu.Lock()
@@ -128,26 +171,75 @@ var errCancelled = errors.New("cancelled")
 
 func (r *Runner) cancelled() bool { return r.p != nil && r.p.cancel.Load() }
 
+func (r *Runner) paused() bool { return r.p != nil && r.p.pause.Load() }
+
+// setPhase updates the visible phase (ignored while paused; restored on Resume).
+func (r *Runner) setPhase(phase string) {
+	if r.p == nil {
+		return
+	}
+	r.p.set(func(p *Progress) {
+		p.phaseWork = phase
+		if !p.pause.Load() {
+			p.Phase = phase
+		}
+	})
+}
+
+func (r *Runner) setCurrentNote(note string) {
+	if r.p == nil {
+		return
+	}
+	r.p.set(func(p *Progress) { p.CurrentNote = note })
+}
+
+func (r *Runner) bumpBytes(delta, fileDone, fileSize int64) {
+	if r.p == nil || delta == 0 && fileSize == 0 {
+		return
+	}
+	r.p.set(func(p *Progress) {
+		p.BytesDone += delta
+		if fileSize > 0 {
+			p.FileBytes, p.FileSize = fileDone, fileSize
+		}
+		el := time.Since(p.started).Seconds()
+		if p.BytesDone > 0 && el > 2 && p.BytesTotal > p.BytesDone {
+			rem := el * float64(p.BytesTotal-p.BytesDone) / float64(p.BytesDone)
+			p.ETA = (time.Duration(rem) * time.Second).Round(time.Second).String()
+		}
+	})
+}
+
 func Run(o Options, p *Progress) (err error) {
 	L := NormalizeLang(o.Lang)
 	o.Lang = string(L)
 	r := &Runner{o: o, L: L, p: p, state: map[string]stateRec{}, reserved: map[string]bool{}}
 	p.set(func(p *Progress) {
 		p.Running, p.Finished, p.Err, p.Warning, p.DryRun, p.Phase, p.Done, p.Total, p.BytesDone, p.BytesTotal = true, false, "", "", o.DryRun, L.T("phase.prep"), 0, 0, 0, 0
+		p.FileBytes, p.FileSize = 0, 0
+		p.CurrentNote = ""
 		p.Stopped = false
+		p.Paused = false
+		p.phaseWork = L.T("phase.prep")
 		p.started = time.Now()
 		p.Stats = nil
+		p.Recent = nil
 		p.Dest = o.Dest
 		p.Lang = string(L)
 	})
+	p.pause.Store(false)
 	defer func() {
 		if rec := recover(); rec != nil {
 			err = r.L.E("err.internal", rec)
 		}
 		st := r.st
 		stopped := errors.Is(err, errCancelled)
+		p.pause.Store(false)
 		p.set(func(p *Progress) {
 			p.Running, p.Finished = false, true
+			p.Paused = false
+			p.FileBytes, p.FileSize = 0, 0
+			p.CurrentNote = ""
 			if stopped {
 				p.Stopped = true
 				p.Err = ""
@@ -217,7 +309,7 @@ func Run(o Options, p *Progress) (err error) {
 	r.log(r.L.T("log.exiftool", r.etPath))
 
 	// 1. scan
-	p.set(func(p *Progress) { p.Phase = r.L.T("phase.scan") })
+	r.setPhase(r.L.T("phase.scan"))
 	sr := scanSources(o.Sources, func(s string) { p.set(func(p *Progress) { p.Current = s }) }, r.cancelled)
 	defer func() {
 		for _, z := range sr.Zips {
@@ -246,8 +338,8 @@ func Run(o Options, p *Progress) (err error) {
 		}
 	}
 	if len(plain) > 0 {
+		r.setPhase(r.L.T("phase.check"))
 		p.set(func(p *Progress) {
-			p.Phase = r.L.T("phase.check")
 			p.Total = int64(len(plain))
 			p.Done = 0
 		})
@@ -261,7 +353,7 @@ func Run(o Options, p *Progress) (err error) {
 					if r.cancelled() {
 						continue
 					}
-					c, err := fileCRC(e.FSPath, r.cancelled)
+					c, err := fileCRC(e.FSPath, r.cancelled, r.paused)
 					if errors.Is(err, errCancelled) || r.cancelled() {
 						continue
 					}
@@ -309,14 +401,20 @@ func Run(o Options, p *Progress) (err error) {
 	}
 
 	// 3. sidecars
+	r.setPhase(r.L.T("phase.json"))
 	p.set(func(p *Progress) {
-		p.Phase = r.L.T("phase.json")
 		p.Total = int64(len(sr.JSON))
 		p.Done = 0
 	})
 	mi := newMetaIndex()
 	sort.SliceStable(sr.JSON, func(i, j int) bool { return sr.JSON[i].ZF != nil && sr.JSON[j].ZF == nil })
 	for _, e := range sr.JSON {
+		if r.cancelled() {
+			return errCancelled
+		}
+		for r.paused() && !r.cancelled() {
+			time.Sleep(100 * time.Millisecond)
+		}
 		if r.cancelled() {
 			return errCancelled
 		}
@@ -465,12 +563,14 @@ func (r *Runner) process() error {
 		phase = r.L.T("phase.dry")
 	}
 	start := time.Now()
+	r.setPhase(phase)
 	r.p.set(func(p *Progress) {
-		p.Phase = phase
 		p.Total = int64(len(r.groups))
 		p.Done = 0
 		p.BytesTotal = bytesTotal
 		p.BytesDone = 0
+		p.FileBytes, p.FileSize = 0, 0
+		p.CurrentNote = ""
 	})
 	workers := o.Workers
 	if workers <= 0 {
@@ -506,14 +606,30 @@ func (r *Runner) process() error {
 					if r.cancelled() {
 						return
 					}
-					r.p.set(func(p *Progress) { p.Current = g.Canon.Display() })
-					r.processGroup(et, g)
+					for r.paused() && !r.cancelled() {
+						time.Sleep(100 * time.Millisecond)
+					}
 					if r.cancelled() {
 						return
 					}
 					r.p.set(func(p *Progress) {
+						p.Current = g.Canon.Display()
+						p.FileBytes, p.FileSize = 0, g.Size
+						p.CurrentNote = ""
+					})
+					r.processGroup(et, g)
+					if r.cancelled() {
+						return
+					}
+					credit := g.byteCredit
+					if credit > g.Size {
+						credit = g.Size
+					}
+					r.p.set(func(p *Progress) {
 						p.Done++
-						p.BytesDone += g.Size
+						p.BytesDone += g.Size - credit
+						p.FileBytes, p.FileSize = 0, 0
+						p.CurrentNote = ""
 						el := time.Since(start).Seconds()
 						if p.BytesDone > 0 && el > 2 {
 							rem := el * float64(p.BytesTotal-p.BytesDone) / float64(p.BytesDone)
@@ -608,6 +724,7 @@ func (r *Runner) processGroup(et *ExifTool, g *Group) {
 			}
 			r.countDate(g)
 			r.stat(func(s *Stats) { s.Resumed++ })
+			r.p.pushRecent(full)
 			r.makeLinks(g)
 			return
 		}
@@ -625,7 +742,10 @@ func (r *Runner) processGroup(et *ExifTool, g *Group) {
 			os.MkdirAll(tdir, 0o755)
 		}
 		tmp = filepath.Join(tdir, g.Key+strings.ToLower(filepath.Ext(g.Name)))
-		if err := copyEntry(g.Canon, tmp, r.L, r.cancelled); err != nil {
+		r.setCurrentNote(r.L.T("progress.copy"))
+		n, err := r.copyEntry(g.Canon, tmp)
+		g.byteCredit += n
+		if err != nil {
 			os.Remove(tmp)
 			if errors.Is(err, errCancelled) || r.cancelled() {
 				return
@@ -636,7 +756,13 @@ func (r *Runner) processGroup(et *ExifTool, g *Group) {
 				if r.cancelled() {
 					return
 				}
-				if e != g.Canon && copyEntry(e, tmp, r.L, r.cancelled) == nil {
+				if e == g.Canon {
+					continue
+				}
+				r.setCurrentNote(r.L.T("progress.copy"))
+				n2, err2 := r.copyEntry(e, tmp)
+				g.byteCredit += n2
+				if err2 == nil {
 					okAlt = true
 					break
 				}
@@ -655,11 +781,13 @@ func (r *Runner) processGroup(et *ExifTool, g *Group) {
 			os.Remove(tmp)
 			return
 		}
+		r.setCurrentNote(r.L.T("progress.meta.read"))
 		tags = et.ReadTags(tmp)
 		if r.cancelled() {
 			os.Remove(tmp)
 			return
 		}
+		r.setCurrentNote("")
 	}
 	r.decideDate(g, tags)
 	r.countDate(g)
@@ -693,7 +821,9 @@ func (r *Runner) processGroup(et *ExifTool, g *Group) {
 		return
 	}
 	g.Status = statusCopied
+	r.setCurrentNote(r.L.T("progress.meta.write"))
 	r.writeMeta(et, g, tags)
+	r.setCurrentNote("")
 	// Stop before the file is recorded: drop the partial copy so a re-run
 	// writes it once, instead of leaving a second name beside it.
 	if r.cancelled() {
@@ -718,36 +848,67 @@ func (r *Runner) processGroup(et *ExifTool, g *Group) {
 	r.stDirty++
 	r.stMu.Unlock()
 	r.saveState(false)
+	r.p.pushRecent(final)
 	r.makeLinks(g)
 }
 
-func copyEntry(e *Entry, dst string, L Lang, stop func() bool) error {
+// copyEntry copies one entry and reports progress. credited is how many bytes were
+// already added to Progress.BytesDone (so the caller can avoid double-counting).
+func (r *Runner) copyEntry(e *Entry, dst string) (credited int64, err error) {
 	rc, err := e.Open()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer rc.Close()
 	f, err := os.Create(dst)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	n, err := copyStream(f, rc, stop)
+	var batch int64
+	var lastReport time.Time
+	flush := func(force bool) {
+		if batch == 0 {
+			return
+		}
+		if !force && time.Since(lastReport) < 200*time.Millisecond && batch < 512<<10 {
+			return
+		}
+		b := batch
+		batch = 0
+		credited += b
+		lastReport = time.Now()
+		r.bumpBytes(b, credited, e.Size)
+	}
+	n, err := copyStream(f, rc, r.cancelled, r.paused, func(nr int64) {
+		batch += nr
+		flush(false)
+	})
+	flush(true)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
-	if errors.Is(err, errCancelled) || (stop != nil && stop()) {
-		return errCancelled
+	if errors.Is(err, errCancelled) || r.cancelled() {
+		return credited, errCancelled
 	}
 	if err == nil && n != e.Size {
-		err = L.E("err.size", n, e.Size)
+		err = r.L.E("err.size", n, e.Size)
 	}
-	return err
+	return credited, err
 }
 
-func copyStream(dst io.Writer, src io.Reader, stop func() bool) (int64, error) {
+func copyStream(dst io.Writer, src io.Reader, stop, paused func() bool, onBytes func(int64)) (int64, error) {
 	buf := make([]byte, 256<<10)
 	var n int64
 	for {
+		if stop != nil && stop() {
+			return n, errCancelled
+		}
+		for paused != nil && paused() {
+			if stop != nil && stop() {
+				return n, errCancelled
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
 		if stop != nil && stop() {
 			return n, errCancelled
 		}
@@ -755,6 +916,9 @@ func copyStream(dst io.Writer, src io.Reader, stop func() bool) (int64, error) {
 		if nr > 0 {
 			nw, ew := dst.Write(buf[:nr])
 			n += int64(nw)
+			if onBytes != nil && nw > 0 {
+				onBytes(int64(nw))
+			}
 			if ew != nil {
 				return n, ew
 			}
@@ -877,7 +1041,7 @@ func (r *Runner) makeLinks(g *Group) {
 				r.log(r.L.T("log.hardlink", err, p))
 			}
 		}
-		if err := copyFile(g.Path, p, r.cancelled); err != nil {
+		if err := r.copyFile(g.Path, p); err != nil {
 			if errors.Is(err, errCancelled) || r.cancelled() {
 				return
 			}
@@ -891,7 +1055,7 @@ func (r *Runner) makeLinks(g *Group) {
 	}
 }
 
-func copyFile(src, dst string, stop func() bool) error {
+func (r *Runner) copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -901,7 +1065,7 @@ func copyFile(src, dst string, stop func() bool) error {
 	if err != nil {
 		return err
 	}
-	if _, err = copyStream(out, in, stop); err != nil {
+	if _, err = copyStream(out, in, r.cancelled, r.paused, nil); err != nil {
 		out.Close()
 		os.Remove(dst)
 		return err
@@ -982,7 +1146,11 @@ func (r *Runner) chooseFolderLang(stored Lang, hasLang, legacy bool) {
 		}
 	}
 	r.folders = r.folderLang.Folders()
-	if r.folderLang != r.L {
-		r.log(r.L.T("log.lock." + string(r.folderLang) + "." + string(r.L)))
+	if r.folderLang.Folders() != r.L.Folders() {
+		if r.folderLang == LangRU {
+			r.log(r.L.T("log.lock.ru"))
+		} else {
+			r.log(r.L.T("log.lock.en"))
+		}
 	}
 }

@@ -1,0 +1,15 @@
+{
+    "title":  "IMG_20210524_110114.jpg",
+    "description":  "smoke test",
+    "photoTakenTime":  {
+                           "timestamp":  "1621854074",
+                           "formatted":  "May 24, 2021, 3:01:14 PM UTC"
+                       },
+    "geoData":  {
+                    "altitude":  200,
+                    "longitude":  27.5,
+                    "latitudeSpan":  0,
+                    "longitudeSpan":  0,
+                    "latitude":  53.9
+                }
+}

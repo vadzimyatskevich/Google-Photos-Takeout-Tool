@@ -47,9 +47,9 @@ func (r *Runner) writeReport() {
 	if r.o.DryRun {
 		title += L.T("rep.dry")
 	}
-	htmlLang := "en"
-	if L == LangRU {
-		htmlLang = "ru"
+	htmlLang := string(L)
+	if htmlLang == "" {
+		htmlLang = "en"
 	}
 	fmt.Fprintf(&b, `<!doctype html><html lang="%s"><meta charset="utf-8"><title>%s</title><style>
 body{font-family:Segoe UI,Arial,sans-serif;margin:24px;color:#222;max-width:1200px}h1{font-size:22px}h2{font-size:17px;margin-top:28px}

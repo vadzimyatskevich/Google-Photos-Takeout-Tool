@@ -51,6 +51,9 @@ type Group struct {
 	Err     string
 	GPS     bool
 	Links   []string
+
+	// byteCredit is how many bytes of Size were already added to Progress.BytesDone during copy.
+	byteCredit int64
 }
 
 func isTrashDir(d string) bool {

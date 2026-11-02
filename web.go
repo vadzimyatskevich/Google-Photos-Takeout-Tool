@@ -4,13 +4,10 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
-	"runtime"
 	"time"
 )
 
@@ -25,7 +22,7 @@ func serveUI(port int, browser bool, lang Lang, langExplicit bool) {
 		return
 	}
 	url := "http://" + ln.Addr().String() + "/"
-	prog := &Progress{}
+	app := NewRestoreApp()
 	mux := http.NewServeMux()
 	page := bytes.ReplaceAll(uiHTML, []byte("{{DEFAULT_LANG}}"), []byte(lang))
 	exp := "false"
@@ -41,10 +38,8 @@ func serveUI(port int, browser bool, lang Lang, langExplicit bool) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(v)
 	}
-	mux.HandleFunc("/api/defaults", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, defaultOptions()) })
-	mux.HandleFunc("/api/info", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"pick": folderPickerAvailable(), "os": runtime.GOOS})
-	})
+	mux.HandleFunc("/api/defaults", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, app.Defaults()) })
+	mux.HandleFunc("/api/info", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, app.Info()) })
 	mux.HandleFunc("/api/start", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST", 405)
@@ -55,48 +50,35 @@ func serveUI(port int, browser bool, lang Lang, langExplicit bool) {
 			writeJSON(w, map[string]string{"error": err.Error()})
 			return
 		}
-		L := NormalizeLang(o.Lang)
-		o.Lang = string(L)
-		prog.mu.Lock()
-		running := prog.Running
-		if !running {
-			prog.Running = true
-		}
-		prog.mu.Unlock()
-		if running {
-			writeJSON(w, map[string]string{"error": L.T("web.running")})
+		writeJSON(w, app.Start(o))
+	})
+	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, app.Status()) })
+	mux.HandleFunc("/api/cancel", func(w http.ResponseWriter, r *http.Request) {
+		app.Cancel()
+		writeJSON(w, "ok")
+	})
+	mux.HandleFunc("/api/pause", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST", 405)
 			return
 		}
-		prog.cancel.Store(false)
-		go Run(o, prog)
-		writeJSON(w, map[string]string{"ok": "1"})
+		app.Pause()
+		writeJSON(w, "ok")
 	})
-	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, prog.snapshot()) })
-	mux.HandleFunc("/api/cancel", func(w http.ResponseWriter, r *http.Request) {
-		prog.cancel.Store(true)
-		prog.set(func(p *Progress) {
-			if p.Running {
-				p.Phase = NormalizeLang(p.Lang).T("phase.stopping")
-			}
-		})
+	mux.HandleFunc("/api/resume", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST", 405)
+			return
+		}
+		app.Resume()
 		writeJSON(w, "ok")
 	})
 	mux.HandleFunc("/api/pick", func(w http.ResponseWriter, r *http.Request) {
-		L := NormalizeLang(r.URL.Query().Get("lang"))
-		p, err := pickFolder(L.T("pick.title"))
-		res := map[string]string{"path": p}
-		if err != nil {
-			if errors.Is(err, errNoPicker) {
-				res["error"] = L.T("pick.err")
-			} else {
-				res["error"] = L.T("pick.errdetail", err)
-			}
-		}
-		writeJSON(w, res)
+		writeJSON(w, app.PickFolder(r.URL.Query().Get("lang")))
 	})
 	serveFile := func(key string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			s := prog.snapshot()
+			s := app.Status()
 			p, _ := s[key].(string)
 			if p == "" {
 				L := LangEN
@@ -115,22 +97,7 @@ func serveUI(port int, browser bool, lang Lang, langExplicit bool) {
 	mux.HandleFunc("/report", serveFile("report"))
 	mux.HandleFunc("/log", serveFile("log"))
 	mux.HandleFunc("/api/open", func(w http.ResponseWriter, r *http.Request) {
-		s := prog.snapshot()
-		what := r.URL.Query().Get("what")
-		var p string
-		switch what {
-		case "dest":
-			p, _ = s["dest"].(string)
-		case "reportdir":
-			rp, _ := s["report"].(string)
-			p = filepath.Dir(rp)
-		}
-		if p != "" {
-			if _, err := os.Stat(p); err == nil {
-				openFolder(p)
-			}
-		}
-		writeJSON(w, "ok")
+		writeJSON(w, app.OpenPath(r.URL.Query().Get("what")))
 	})
 	fmt.Println(lang.T("web.banner"))
 	fmt.Println(lang.T("web.url", url))

@@ -7,8 +7,8 @@ writes the capture date, GPS coordinates, description, people, and albums from
 Google's JSON files into the files themselves.
 Your original archives and folders are NOT modified and NOT deleted.
 
-The interface is in English by default. Use the EN / RU switch at the top of the
-page (the choice is remembered) or start the program with -lang ru.
+The interface is in English by default. Choose a language from the dropdown at the
+top of the window (the choice is remembered) or start with -lang en|ru|de|fr|es|pl|lt.
 Folder names follow the language (Albums, No date, _Trash, Archive, Unknown month
 in English). For a destination that was already created, those names stay as they
 are — the choice is saved in _restore/state.json — so a later run does not split
@@ -16,19 +16,21 @@ the library across two naming schemes.
 
 HOW TO USE (Windows)
 1. Unzip this archive anywhere (for example, the desktop).
-2. Double-click TakeoutRestore.exe. A console window opens (leave it open) and
-   the program page opens in your browser.
+2. Double-click TakeoutRestore.exe. A desktop window opens (no browser required).
    Windows SmartScreen may warn that the app is unrecognized (it is not signed):
    click More info -> Run anyway.
    The first launch unpacks the built-in ExifTool (a few seconds).
-3. In Sources, enter the folder that contains your Takeout zips, one path per line.
-   The same photo from different exports, albums, and partly extracted folders is
-   kept only once.
-4. Choose a destination folder that is NOT inside the folder with the archives.
-5. Click Dry run first — nothing is written, but you can see how many files,
-   duplicates, and how much disk space are needed. Open the report.
+   Current Windows 10/11 already include WebView2, which the window uses.
+3. On step 1 (Sources), add the folder that contains your Takeout zips (or add
+   zip files). The same photo from different exports, albums, and partly
+   extracted folders is kept only once.
+4. On step 2, choose a destination folder that is NOT inside the folder with the
+   archives, and pick layout / album options.
+5. On step 3, click Dry run first — nothing is written, but you can see how many
+   files, duplicates, and how much disk space are needed. Open the report.
 6. Then click Start restore. If you stop (or close the window), run it again with
    the same destination: it continues where it stopped and does not create duplicates.
+   Optional: TakeoutRestore.exe -web opens the older localhost browser UI.
 
 WHAT YOU GET
   D:\Photos Restored\2021\2021-05\IMG_20210524_110114.jpg   — photos by date
@@ -64,12 +66,14 @@ Install ExifTool first (it is not built into the Linux binary):
 Unpack TakeoutRestore-linux-amd64.tar.gz, then:
   chmod +x TakeoutRestore
   ./TakeoutRestore
-The page opens in your browser (xdg-open). If that fails, the address is printed
-in the terminal — open it yourself. Folder buttons appear when zenity or kdialog
-is installed; otherwise paste the path.
+A desktop window opens (needs WebKitGTK). Fallback browser UI: ./TakeoutRestore -web
+(folder buttons need zenity/kdialog, or paste the path).
   ./TakeoutRestore -src ~/Takeout -dest ~/Photos-Restored -dry-run
   ./TakeoutRestore -src ~/Takeout -dest ~/Photos-Restored -lang ru
-Build from source (Go 1.21+, no extra modules): go build -o TakeoutRestore .
+Full release pack (GUI + CLI for all platforms): .\build.ps1   or   ./build.sh
+Local Windows GUI+CLI: .\build.ps1 -Local
+Manual desktop GUI: go build -tags desktop,production,gui -ldflags "-s -w -H windowsgui" -o TakeoutRestore-windows-amd64-gui.exe .
+Manual CLI+web only:  go build -o TakeoutRestore .
 
 COMMAND LINE (optional)
   TakeoutRestore.exe -src "D:\Takeout" -dest "D:\Photos Restored" -dry-run

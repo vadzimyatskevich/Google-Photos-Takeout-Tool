@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -226,7 +227,7 @@ func scanSources(srcs []string, prog func(string), stop func() bool) *ScanResult
 // relKey: album/name lowercased for matching folder copies against zip copies.
 func relKey(e *Entry) string { return strings.ToLower(e.Dir + "/" + e.Name) }
 
-func fileCRC(p string, stop func() bool) (uint32, error) {
+func fileCRC(p string, stop, paused func() bool) (uint32, error) {
 	f, err := os.Open(p)
 	if err != nil {
 		return 0, err
@@ -235,6 +236,15 @@ func fileCRC(p string, stop func() bool) (uint32, error) {
 	h := crc32.NewIEEE()
 	buf := make([]byte, 1<<20)
 	for {
+		if stop != nil && stop() {
+			return 0, errCancelled
+		}
+		for paused != nil && paused() {
+			if stop != nil && stop() {
+				return 0, errCancelled
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
 		if stop != nil && stop() {
 			return 0, errCancelled
 		}

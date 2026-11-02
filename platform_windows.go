@@ -3,6 +3,7 @@
 package main
 
 import (
+	"os"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -11,9 +12,34 @@ import (
 )
 
 var (
-	kernel32        = syscall.NewLazyDLL("kernel32.dll")
-	procGetDiskFree = kernel32.NewProc("GetDiskFreeSpaceExW")
+	kernel32          = syscall.NewLazyDLL("kernel32.dll")
+	procGetDiskFree   = kernel32.NewProc("GetDiskFreeSpaceExW")
+	procAttachConsole = kernel32.NewProc("AttachConsole")
+	procAllocConsole  = kernel32.NewProc("AllocConsole")
 )
+
+// ensureConsole attaches to the parent console (or creates one) so CLI / -web
+// output still works when the binary is linked with -H windowsgui.
+func ensureConsole() {
+	const attachParentProcess = ^uintptr(0) // (DWORD)-1
+	r, _, _ := procAttachConsole.Call(attachParentProcess)
+	if r == 0 {
+		procAllocConsole.Call()
+	}
+	out, err := syscall.GetStdHandle(syscall.STD_OUTPUT_HANDLE)
+	if err == nil {
+		osStdout := os.NewFile(uintptr(out), "stdout")
+		os.Stdout = osStdout
+	}
+	errHandle, err := syscall.GetStdHandle(syscall.STD_ERROR_HANDLE)
+	if err == nil {
+		os.Stderr = os.NewFile(uintptr(errHandle), "stderr")
+	}
+	inHandle, err := syscall.GetStdHandle(syscall.STD_INPUT_HANDLE)
+	if err == nil {
+		os.Stdin = os.NewFile(uintptr(inHandle), "stdin")
+	}
+}
 
 func hideWindow(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}

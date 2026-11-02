@@ -13,6 +13,8 @@ import (
 
 func hideWindow(cmd *exec.Cmd) {}
 
+func ensureConsole() {}
+
 func freeSpace(path string) (uint64, error) {
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(path, &st); err != nil {

@@ -1,4 +1,13 @@
-dist/
+/dist/
 assets/*.zip
 *.exe
 /tmp/
+test/manual_out*/
+test/smoke_*/
+test/out*/
+
+# Design drafts (icon variants, UI mockups)
+design/
+
+# Local Cursor rules / agent config
+.cursor/
