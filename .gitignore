@@ -1,0 +1,19 @@
+/dist/
+assets/*.zip
+assets/*.tar.gz
+*.exe
+!releases/*.exe
+/tmp/
+test/manual_out*/
+test/smoke_*/
+test/out*/
+
+# Design drafts (icon variants, UI mockups)
+design/
+
+# Local editor / agent rules (not part of the project)
+.cursor/
+.cursorrules
+AGENTS.md
+CLAUDE.md
+.github/copilot-instructions.md
