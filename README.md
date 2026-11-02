@@ -6,8 +6,6 @@ One portable app for Windows, macOS and Linux. No Python. ExifTool is built in.
 
 ![TakeoutRestore — restore Google Takeout photos with live preview](docs/screenshot.png)
 
-> Run a **Dry run** first and check the report before processing your real library.
-
 ## Download
 
 Prebuilt binaries are in [`releases/`](releases/).
@@ -26,10 +24,12 @@ Windows zip unpacks to `TakeoutRestore.exe`. Linux tar.gz unpacks to `./TakeoutR
 
 1. Download the desktop app for your OS from the table above and unzip it.
 2. Open `TakeoutRestore.exe` (Windows) or `./TakeoutRestore` (Linux).
-3. Add the folder with your Google Takeout zips, choose a destination, run **Dry run**.
-4. Check the report, then press **Start restore**.
+3. Add the folder with your Google Takeout zips, choose a destination, press **Start restore**.
+4. Check the report when it finishes. Pause / Stop freeze or end a run; Start again continues from saved progress.
 
 Windows SmartScreen may warn about an unsigned app: **More info → Run anyway**. WebView2 is required (included with current Windows 10/11). On Linux the desktop window needs WebKitGTK — see the [full guide](docs/USAGE.md#linux).
+
+Command line (optional `-dry-run` writes nothing, only a report):
 
 ```
 TakeoutRestore.exe -src "D:\Takeout" -dest "D:\Photos Restored" -dry-run
