@@ -13,12 +13,15 @@ import (
 
 func (r *Runner) writeReport() {
 	s := r.st
-	// CSV with every unique file
+	L := r.L
 	if f, err := os.Create(filepath.Join(r.outDir, "files.csv")); err == nil {
 		f.WriteString("\uFEFF")
 		w := csv.NewWriter(f)
 		w.Comma = ';'
-		w.Write([]string{"статус", "файл", "дата", "источник даты", "json", "сопоставление json", "альбомы", "копий в источниках", "источник", "ошибка"})
+		w.Write([]string{
+			L.T("csv.status"), L.T("csv.file"), L.T("csv.date"), L.T("csv.datesrc"), L.T("csv.json"),
+			L.T("csv.match"), L.T("csv.albums"), L.T("csv.copies"), L.T("csv.source"), L.T("csv.error"),
+		})
 		for _, g := range r.groups {
 			d := ""
 			if !g.Date.IsZero() {
@@ -34,55 +37,62 @@ func (r *Runner) writeReport() {
 					}
 				}
 			}
-			w.Write([]string{g.Status, rel(r.o.Dest, g.Path), d, g.DateSrc, js, how, strings.Join(g.Albums, " | "), fmt.Sprint(len(g.Members)), g.Canon.Display(), g.Err})
+			w.Write([]string{L.statusText(g.Status), rel(r.o.Dest, g.Path), d, L.dateSrcText(g.DateSrc), js, how, strings.Join(g.Albums, " | "), fmt.Sprint(len(g.Members)), g.Canon.Display(), g.Err})
 		}
 		w.Flush()
 		f.Close()
 	}
 	var b strings.Builder
-	title := "Отчёт о восстановлении"
+	title := L.T("rep.title")
 	if r.o.DryRun {
-		title += " — ПРОБНЫЙ ПРОГОН (ничего не записано)"
+		title += L.T("rep.dry")
 	}
-	fmt.Fprintf(&b, `<!doctype html><html lang="ru"><meta charset="utf-8"><title>%s</title><style>
+	htmlLang := "en"
+	if L == LangRU {
+		htmlLang = "ru"
+	}
+	fmt.Fprintf(&b, `<!doctype html><html lang="%s"><meta charset="utf-8"><title>%s</title><style>
 body{font-family:Segoe UI,Arial,sans-serif;margin:24px;color:#222;max-width:1200px}h1{font-size:22px}h2{font-size:17px;margin-top:28px}
 table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:4px 8px;font-size:13px;text-align:left;vertical-align:top}th{background:#f3f3f3}
 .n{text-align:right;font-variant-numeric:tabular-nums}details{margin:8px 0}summary{cursor:pointer;font-weight:600}.err{color:#b00}
-</style><h1>%s</h1><p>%s<br>Назначение: <b>%s</b><br>Источники: %s<br>Часовой пояс: %s</p><table>`,
-		title, title, time.Now().Format("02.01.2006 15:04"), html.EscapeString(r.o.Dest), html.EscapeString(strings.Join(r.o.Sources, "; ")), html.EscapeString(r.loc.String()))
+</style><h1>%s</h1><p>%s<br>%s</p><table>`,
+		htmlLang, html.EscapeString(title), html.EscapeString(title), time.Now().Format(L.T("rep.timefmt")),
+		L.T("rep.meta", html.EscapeString(r.o.Dest), html.EscapeString(strings.Join(r.o.Sources, "; ")), html.EscapeString(r.loc.String())))
 	row := func(k string, v any) { fmt.Fprintf(&b, "<tr><td>%s</td><td class=n>%v</td></tr>", k, v) }
-	row("Медиафайлов найдено в источниках (всех копий)", s.MediaEntries)
-	row("Уникальных файлов", s.Unique)
-	row("Объём уникальных файлов", fmt.Sprintf("%.2f ГБ", gb(s.UniqueBytes)))
-	row("Дубликатов пропущено (тот же файл в другом альбоме/архиве/выгрузке)", s.Duplicates)
-	row("Недораспакованных/битых копий в папках пропущено", s.Incomplete)
-	row("Отредактированных версий пропущено", s.EditedSkipped)
-	row("Скопировано", s.Copied)
-	row("Уже было (повторный запуск)", s.Resumed)
-	row("Дата из JSON (Google)", s.DateJSON)
-	row("Дата из EXIF файла", s.DateEXIF)
-	row("Дата из имени файла", s.DateName)
-	row("Только год (папка «Photos from ГГГГ»)", s.DateYear)
-	row("Без даты", s.DateNone)
-	row("Записаны метаданные (файлов)", s.MetaWritten)
-	row("Записан GPS", s.GPSWritten)
-	row("Записано описание", s.DescWritten)
-	row("XMP-файлов рядом (avi, bmp…)", s.XMPSidecars)
-	row("Ссылок в альбомах (жёсткие ссылки)", s.AlbumLinks)
-	row("Копий в альбомах", s.AlbumCopies)
-	row("В «_Корзина»", s.Trash)
-	row("JSON-метаданных", s.JSONTotal)
-	row("JSON без файла", s.JSONUnmatched)
-	row("Файлов без JSON", s.MediaNoJSON)
-	row("<span class=err>Ошибок</span>", s.Errors)
+	row(L.T("rep.media"), s.MediaEntries)
+	row(L.T("rep.unique"), s.Unique)
+	row(L.T("rep.ubytes"), L.T("rep.gb", gb(s.UniqueBytes)))
+	row(L.T("rep.dups"), s.Duplicates)
+	row(L.T("rep.incomplete"), s.Incomplete)
+	row(L.T("rep.edited"), s.EditedSkipped)
+	row(L.T("rep.copied"), s.Copied)
+	row(L.T("rep.resumed"), s.Resumed)
+	row(L.T("rep.datejson"), s.DateJSON)
+	row(L.T("rep.dateexif"), s.DateEXIF)
+	row(L.T("rep.datename"), s.DateName)
+	row(L.T("rep.dateyear"), s.DateYear)
+	row(L.T("rep.datenone"), s.DateNone)
+	row(L.T("rep.metafiles"), s.MetaWritten)
+	row(L.T("rep.gps"), s.GPSWritten)
+	row(L.T("rep.desc"), s.DescWritten)
+	row(L.T("rep.xmp"), s.XMPSidecars)
+	row(L.T("rep.links"), s.AlbumLinks)
+	row(L.T("rep.copies"), s.AlbumCopies)
+	row(L.T("rep.trash", r.folders.Trash), s.Trash)
+	row(L.T("rep.jsontotal"), s.JSONTotal)
+	row(L.T("rep.unmatched"), s.JSONUnmatched)
+	row(L.T("rep.nojson"), s.MediaNoJSON)
+	row("<span class=err>"+html.EscapeString(L.T("rep.errors"))+"</span>", s.Errors)
 	if s.FreeBytes > 0 {
-		row("Нужно места / свободно", fmt.Sprintf("%.1f / %.1f ГБ", gb(s.NeedBytes), gb(s.FreeBytes)))
+		row(L.T("rep.space"), L.T("rep.gbpair", gb(s.NeedBytes), gb(s.FreeBytes)))
 	}
-	b.WriteString("</table><p>Полный список файлов: <code>files.csv</code> (открывается в Excel), журнал: <code>log.txt</code>.</p>")
+	b.WriteString("</table><p>")
+	b.WriteString(L.T("rep.footer"))
+	b.WriteString("</p>")
 	list := func(title string, rows [][]string, head []string) {
-		fmt.Fprintf(&b, "<details%s><summary>%s (%d)</summary><table><tr>", map[bool]string{true: " open", false: ""}[len(rows) > 0 && len(rows) < 50], title, len(rows))
+		fmt.Fprintf(&b, "<details%s><summary>%s (%d)</summary><table><tr>", map[bool]string{true: " open", false: ""}[len(rows) > 0 && len(rows) < 50], html.EscapeString(title), len(rows))
 		for _, h := range head {
-			fmt.Fprintf(&b, "<th>%s</th>", h)
+			fmt.Fprintf(&b, "<th>%s</th>", html.EscapeString(h))
 		}
 		b.WriteString("</tr>")
 		for _, rw := range rows {
@@ -101,8 +111,7 @@ table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:4px 8px;font-
 		}
 	}
 	for _, g := range r.noJSON {
-		errs2 := g.DateSrc
-		noj = append(noj, []string{g.Canon.Display(), errs2, rel(r.o.Dest, g.Path)})
+		noj = append(noj, []string{g.Canon.Display(), L.dateSrcText(g.DateSrc), rel(r.o.Dest, g.Path)})
 	}
 	for _, sc := range r.unmatched {
 		unm = append(unm, []string{sc.Dir + "/" + sc.JSONName, sc.Title})
@@ -111,14 +120,14 @@ table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:4px 8px;font-
 	for _, e := range r.incomplete {
 		inc = append(inc, []string{e.FSPath, fmt.Sprint(e.Size)})
 	}
-	list("Ошибки", errs, []string{"файл", "ошибка"})
-	list("Файлы без JSON", noj, []string{"файл", "источник даты", "куда"})
-	list("JSON без медиафайла", unm, []string{"json", "title"})
-	list("Пропущенные недораспакованные копии (есть полная копия в zip)", inc, []string{"файл", "размер"})
+	list(L.T("rep.sec.errors"), errs, []string{L.T("rep.h.file"), L.T("rep.h.error")})
+	list(L.T("rep.sec.nojson"), noj, []string{L.T("rep.h.file"), L.T("rep.h.datesrc"), L.T("rep.h.dest")})
+	list(L.T("rep.sec.unmatched"), unm, []string{L.T("rep.h.json"), L.T("rep.h.title")})
+	list(L.T("rep.sec.incomplete"), inc, []string{L.T("rep.h.file"), L.T("rep.h.size")})
 	os.WriteFile(filepath.Join(r.outDir, "report.html"), []byte(b.String()), 0o644)
 	rp := filepath.Join(r.outDir, "report.html")
 	r.p.set(func(p *Progress) { p.Report = rp })
-	r.logf("Отчёт: %s", rp)
+	r.log(L.T("log.report", rp))
 }
 
 func rel(base, p string) string {

@@ -16,27 +16,36 @@ func (m *multiFlag) String() string     { return strings.Join(*m, ";") }
 func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 
 func main() {
+	peek, explicit := peekLang(os.Args[1:])
+	L := NormalizeLang(peek)
 	o := defaultOptions()
 	var srcs multiFlag
-	flag.Var(&srcs, "src", "источник: папка или zip (можно несколько раз)")
-	flag.StringVar(&o.Dest, "dest", "", "папка назначения (если указана — консольный режим)")
-	flag.StringVar(&o.Layout, "layout", o.Layout, "структура: ym (ГГГГ\\ГГГГ-ММ) | y_m (ГГГГ\\ММ) | ymd (ГГГГ\\ГГГГ-ММ-ДД) | y (ГГГГ) | album")
-	flag.StringVar(&o.Albums, "albums", o.Albums, "папки альбомов: hardlink | copy | none")
-	flag.BoolVar(&o.Rename, "rename", false, "переименовать в ГГГГ-ММ-ДД_ЧЧММСС_имя")
-	flag.StringVar(&o.TZ, "tz", o.TZ, "часовой пояс для дат: local | UTC | Europe/Minsk | +03:00")
-	flag.BoolVar(&o.Overwrite, "overwrite", false, "перезаписывать существующие теги (по умолчанию только пустые)")
-	flag.BoolVar(&o.SkipEdited, "skip-edited", false, "пропускать отредактированные копии (-edited/-изменено)")
-	flag.BoolVar(&o.XMPSidecar, "xmp", o.XMPSidecar, "XMP-файл рядом для avi/bmp и при ошибке записи")
-	flag.BoolVar(&o.Rating, "rating", o.Rating, "избранное -> рейтинг 5")
-	flag.BoolVar(&o.AlbumKeywords, "album-keywords", o.AlbumKeywords, "названия альбомов -> ключевые слова XMP")
-	flag.BoolVar(&o.People, "people", o.People, "имена людей -> ключевые слова/PersonInImage")
-	flag.BoolVar(&o.DryRun, "dry-run", false, "пробный прогон, ничего не записывать")
-	flag.BoolVar(&o.Force, "force", false, "продолжать даже при нехватке места")
-	flag.IntVar(&o.Workers, "workers", 0, "число потоков (0 = авто)")
-	flag.StringVar(&o.ExifTool, "exiftool", "", "путь к exiftool (по умолчанию встроенный)")
-	port := flag.Int("port", 0, "порт веб-интерфейса (0 = случайный)")
-	noBrowser := flag.Bool("no-browser", false, "не открывать браузер")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "%s\n\n", L.T("usage.header"))
+		flag.PrintDefaults()
+	}
+	flag.Var(&srcs, "src", L.T("flag.src"))
+	flag.StringVar(&o.Dest, "dest", "", L.T("flag.dest"))
+	flag.StringVar(&o.Layout, "layout", o.Layout, L.T("flag.layout"))
+	flag.StringVar(&o.Albums, "albums", o.Albums, L.T("flag.albums"))
+	flag.BoolVar(&o.Rename, "rename", false, L.T("flag.rename"))
+	flag.StringVar(&o.TZ, "tz", o.TZ, L.T("flag.tz"))
+	flag.BoolVar(&o.Overwrite, "overwrite", false, L.T("flag.overwrite"))
+	flag.BoolVar(&o.SkipEdited, "skip-edited", false, L.T("flag.skip-edited"))
+	flag.BoolVar(&o.XMPSidecar, "xmp", o.XMPSidecar, L.T("flag.xmp"))
+	flag.BoolVar(&o.Rating, "rating", o.Rating, L.T("flag.rating"))
+	flag.BoolVar(&o.AlbumKeywords, "album-keywords", o.AlbumKeywords, L.T("flag.album-keywords"))
+	flag.BoolVar(&o.People, "people", o.People, L.T("flag.people"))
+	flag.BoolVar(&o.DryRun, "dry-run", false, L.T("flag.dry-run"))
+	flag.BoolVar(&o.Force, "force", false, L.T("flag.force"))
+	flag.IntVar(&o.Workers, "workers", 0, L.T("flag.workers"))
+	flag.StringVar(&o.ExifTool, "exiftool", "", L.T("flag.exiftool"))
+	flag.StringVar(&o.Lang, "lang", "en", L.T("flag.lang"))
+	port := flag.Int("port", 0, L.T("flag.port"))
+	noBrowser := flag.Bool("no-browser", false, L.T("flag.no-browser"))
 	flag.Parse()
+	L = NormalizeLang(o.Lang)
+	o.Lang = string(L)
 	o.Sources = append(srcs, flag.Args()...)
 	if o.Dest != "" {
 		cliMode = true
@@ -44,15 +53,15 @@ func main() {
 		err := Run(o, p)
 		snap := p.snapshot()
 		if s := p.Stats; s != nil {
-			fmt.Printf("\nУникальных: %d, дубликатов: %d, скопировано: %d, уже было: %d, ошибок: %d\nДаты: json %d, exif %d, имя файла %d, год %d, нет %d; GPS %d\n",
+			fmt.Printf(L.T("cli.summary"),
 				s.Unique, s.Duplicates, s.Copied, s.Resumed, s.Errors, s.DateJSON, s.DateEXIF, s.DateName, s.DateYear, s.DateNone, s.GPSWritten)
 		}
-		fmt.Println("Отчёт:", snap["report"])
+		fmt.Println(L.T("cli.report", snap["report"]))
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "ОШИБКА:", err)
+			fmt.Fprintln(os.Stderr, L.T("cli.error", err))
 			os.Exit(1)
 		}
 		return
 	}
-	serveUI(*port, !*noBrowser)
+	serveUI(*port, !*noBrowser, L, explicit)
 }

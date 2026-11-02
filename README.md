@@ -27,12 +27,12 @@ TakeoutRestore fixes all of that in one pass.
 - **Duplicate removal** across albums and across multiple Takeout exports, keeping one copy.
 - **Clean folder structure:** `2021/2021-05/…`, plus album folders made with NTFS hard links, so albums take no extra disk space.
 - **Safe:** never modifies your source files. Dry-run mode previews everything, re-runs continue where they stopped, and an HTML report lists every file, duplicate and unmatched JSON.
-- **Simple web interface** in your browser, or a command line for scripting.
+- **Simple web interface** in your browser (English by default, Russian optional), or a command line for scripting.
 
 ## Quick start
 
 1. Download `TakeoutRestore.zip` from [Releases](../../releases) and unzip it.
-2. Double-click `TakeoutRestore.exe`; a page opens in your browser.
+2. Double-click `TakeoutRestore.exe`; a page opens in your browser. The interface is English. Switch to Russian with **RU** at the top of the page (the choice is remembered) or start with `-lang ru`.
 3. Add your Takeout folder (for example `D:\Takeout`), choose an output folder, and run **Dry-run** first.
 4. Check the report, then press **Start**.
 
@@ -43,9 +43,10 @@ TakeoutRestore fixes all of that in one pass.
 ```
 TakeoutRestore.exe -src "D:\Takeout" -dest "D:\Photos Restored" -dry-run
 TakeoutRestore.exe -src "D:\Takeout" -src "E:\Takeout 2023" -dest "D:\Photos Restored"
+TakeoutRestore.exe -src "D:\Takeout" -dest "D:\Photos Restored" -lang ru
 ```
 
-Defaults: `-layout ym -albums hardlink -tz local -xmp -rating -album-keywords -people`. Use `-overwrite` to replace existing tags, `-tz Europe/Berlin` to set a time zone, and `-force` to start even if free space looks short. Run `TakeoutRestore.exe -h` for all options.
+Defaults: `-layout ym -albums hardlink -tz local -xmp -rating -album-keywords -people -lang en`. Use `-overwrite` to replace existing tags, `-tz Europe/Berlin` to set a time zone, and `-force` to start even if free space looks short. `-lang en|ru` selects the language of the interface, the report, and (for a new destination) the folder names. Run `TakeoutRestore.exe -h` for all options. Add `-lang ru` before `-h` to read the help in Russian.
 
 ## Output
 
@@ -53,13 +54,13 @@ Defaults: `-layout ym -albums hardlink -tz local -xmp -rating -album-keywords -p
 Photos Restored/
 ├── 2019/2019-07/IMG_20190714_181502.jpg
 ├── 2021/2021-05/IMG_20210524_110114.jpg
-├── Альбомы/Germany 2017/…      (album folders, hard links)
-├── Без даты/                   (no date found)
-├── _Корзина/                   (Google Photos trash)
+├── Albums/Germany 2017/…       (album folders, hard links)
+├── No date/                    (no date found)
+├── _Trash/                     (Google Photos trash)
 └── _restore/report.html, files.csv, log.txt, state.json
 ```
 
-Folder names in the output are currently Russian; the UI is in Russian too. English localization is planned.
+Those folder names are English by default. With `-lang ru` (or **RU** in the web UI) the same folders are named `Альбомы`, `Без даты`, `_Корзина`, `Архив`, and `Месяц неизвестен`. The folder language is stored in `_restore/state.json`. A later run on that destination keeps the saved names, even if you switch language, so the library is not split across two schemes. Messages and the report follow the language of the current run.
 
 ## How dates are chosen
 
@@ -71,13 +72,46 @@ Folder names in the output are currently Russian; the UI is in Russian too. Engl
 
 Only missing tags are written unless `-overwrite` is set. File modified and creation times are set to the date taken.
 
+## Linux
+
+The Linux build uses ExifTool from the system (it is not embedded).
+
+1. Install ExifTool:
+   - Debian/Ubuntu: `sudo apt install libimage-exiftool-perl`
+   - Fedora: `sudo dnf install perl-Image-ExifTool`
+   - Arch: `sudo pacman -S perl-image-exiftool`
+2. Download `TakeoutRestore-linux-amd64.tar.gz` (or `TakeoutRestore-linux-arm64.tar.gz`), unpack it, and `chmod +x TakeoutRestore`.
+3. Web UI: `./TakeoutRestore`. It opens a browser with `xdg-open`, or prints the URL if that fails. There is no Windows folder dialog: paste paths, or install `zenity` or `kdialog` to use the folder buttons.
+4. Command line:
+
+```
+./TakeoutRestore -src ~/Takeout -dest ~/Photos-Restored -dry-run
+./TakeoutRestore -src ~/Takeout -dest ~/Photos-Restored -lang ru
+```
+
+Album hard links work when the destination is on the same filesystem. If a link cannot be created, the file is copied instead.
+
+Build just the Linux binary from source (Go 1.21+, no external modules):
+
+```
+go build -o TakeoutRestore .
+```
+
+macOS archives (`TakeoutRestore-darwin-amd64.tar.gz`, `TakeoutRestore-darwin-arm64.tar.gz`) work the same way. Install ExifTool with `brew install exiftool`. The browser opens with `open`.
+
 ## Building from source
 
 Requires Go 1.21+, `curl` and `zip`. Pure Go, no external modules.
 
 ```
-./build.sh        # downloads ExifTool for Windows, builds dist/TakeoutRestore.exe and dist/TakeoutRestore.zip
+./build.sh
 ```
+
+`./build.sh` downloads ExifTool for Windows and writes:
+
+- `dist/TakeoutRestore.exe` and `dist/TakeoutRestore.zip` (Windows x64, ExifTool embedded; the zip includes `README.txt` and `ПРОЧТИ.txt`)
+- `dist/TakeoutRestore-linux-amd64.tar.gz` and `dist/TakeoutRestore-linux-arm64.tar.gz`
+- `dist/TakeoutRestore-darwin-amd64.tar.gz` and `dist/TakeoutRestore-darwin-arm64.tar.gz`
 
 Tests (Linux, needs Python 3, ffmpeg, Pillow and exiftool):
 

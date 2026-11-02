@@ -106,10 +106,11 @@ func init() {
 func isMedia(name string) bool { return mediaExt[strings.ToLower(filepath.Ext(name))] }
 
 type ScanResult struct {
-	Media []*Entry
-	JSON  []*Entry
-	Zips  []*zip.ReadCloser
-	Errs  []string
+	Media     []*Entry
+	JSON      []*Entry
+	Zips      []*zip.ReadCloser
+	Errs      []string
+	Cancelled bool
 }
 
 func splitRel(rel string) (dir, name string) {
@@ -124,7 +125,10 @@ func splitRel(rel string) (dir, name string) {
 	return d[j+1:], name
 }
 
-func scanSources(srcs []string, prog func(string)) *ScanResult {
+func scanSources(srcs []string, prog func(string), stop func() bool) *ScanResult {
+	if stop == nil {
+		stop = func() bool { return false }
+	}
 	r := &ScanResult{}
 	add := func(e *Entry) {
 		e.Dir, e.Name = splitRel(e.Rel)
@@ -136,14 +140,27 @@ func scanSources(srcs []string, prog func(string)) *ScanResult {
 		}
 	}
 	addZip := func(p string) {
+		if stop() {
+			r.Cancelled = true
+			return
+		}
 		prog(p)
 		zr, err := zip.OpenReader(p)
 		if err != nil {
 			r.Errs = append(r.Errs, "zip: "+p+": "+err.Error())
 			return
 		}
+		if stop() {
+			zr.Close()
+			r.Cancelled = true
+			return
+		}
 		r.Zips = append(r.Zips, zr)
 		for _, f := range zr.File {
+			if stop() {
+				r.Cancelled = true
+				return
+			}
 			if f.FileInfo().IsDir() {
 				continue
 			}
@@ -161,6 +178,10 @@ func scanSources(srcs []string, prog func(string)) *ScanResult {
 			r.Errs = append(r.Errs, "source: "+s+": "+err.Error())
 			continue
 		}
+		if stop() {
+			r.Cancelled = true
+			return r
+		}
 		if !st.IsDir() {
 			if strings.EqualFold(filepath.Ext(s), ".zip") {
 				addZip(s)
@@ -168,6 +189,10 @@ func scanSources(srcs []string, prog func(string)) *ScanResult {
 			continue
 		}
 		filepath.WalkDir(s, func(p string, d fs.DirEntry, err error) error {
+			if stop() {
+				r.Cancelled = true
+				return fs.SkipAll
+			}
 			if err != nil {
 				r.Errs = append(r.Errs, "walk: "+p+": "+err.Error())
 				return nil
@@ -201,13 +226,29 @@ func scanSources(srcs []string, prog func(string)) *ScanResult {
 // relKey: album/name lowercased for matching folder copies against zip copies.
 func relKey(e *Entry) string { return strings.ToLower(e.Dir + "/" + e.Name) }
 
-func fileCRC(p string) (uint32, error) {
+func fileCRC(p string, stop func() bool) (uint32, error) {
 	f, err := os.Open(p)
 	if err != nil {
 		return 0, err
 	}
 	defer f.Close()
 	h := crc32.NewIEEE()
-	_, err = io.Copy(h, f)
-	return h.Sum32(), err
+	buf := make([]byte, 1<<20)
+	for {
+		if stop != nil && stop() {
+			return 0, errCancelled
+		}
+		n, er := f.Read(buf)
+		if n > 0 {
+			if _, ew := h.Write(buf[:n]); ew != nil {
+				return 0, ew
+			}
+		}
+		if er == io.EOF {
+			return h.Sum32(), nil
+		}
+		if er != nil {
+			return 0, er
+		}
+	}
 }
